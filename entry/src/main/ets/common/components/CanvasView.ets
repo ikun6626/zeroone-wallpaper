@@ -172,6 +172,8 @@ export struct CanvasView {
             .backgroundColor('#FF6B6B')
             .borderRadius(11)
             .offset({ x: 8, y: -8 })
+            // 22×22 的 ✕ 在真机上很难点中（尤其贴着边时）→ 放大触摸热区，视觉不变
+            .responseRegion({ x: -12, y: -12, width: 46, height: 46 })
             .onClick(() => {
               this.onRemoveText(idx);
             })
@@ -282,6 +284,8 @@ export struct CanvasView {
             .backgroundColor('#FF6B6B')
             .borderRadius(11)
             .position({ x: 90 * s.scale, y: -10 })
+            // 同上：贴纸的 ✕ 也加大触摸热区
+            .responseRegion({ x: -12, y: -12, width: 46, height: 46 })
             .onClick(() => {
               this.onRemoveSticker(idx);
             })
