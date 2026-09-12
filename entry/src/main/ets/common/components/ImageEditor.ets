@@ -7,6 +7,7 @@ import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { taskpool } from '@kit.ArkTS';
 import { Wallpaper } from '../../model/Wallpaper';
 import { runFilterTask, runTextureTask } from '../editor/FilterTask';
+import { toggleFilter, toggleTexture, NO_FILTER, NO_TEXTURE } from '../editor/FilterPipeline';
 import { TextItem, StickerItem, HandleBase, DispRect, CropRect } from '../editor/EditorModels';
 import {
   BASE_FILTERS,
@@ -40,6 +41,28 @@ import { CanvasSpec } from '../canvas/CanvasSpec';
 import { EditGuard } from '../utils/EditGuard';
 import { EditorCanvasModel, ObservableCanvasState } from '../editor/EditorCanvasModel';
 import { CanvasView } from './CanvasView';
+
+/**
+ * 位图副本（"让 Image 重绘"的唯一手段：换个 PixelMap 句柄，框架才会重新取图）
+ *
+ * 两个字段都要填（对照本机 SDK 的 `image.InitializationOptions`）：
+ *  - `srcPixelFormat`：这段字节到底是什么格式（解码出来的可能是 BGRA_8888）；
+ *  - `pixelFormat`：期望产出 RGBA_8888 —— 后面的滤镜（TaskPool 逐像素）与 Image 组件
+ *    都按 RGBA 处理，统一格式既避免"旋转/翻转后掉色"，也避免把 BGRA 字节当 RGBA 去调色。
+ * 参考实现：`limuyang2/ohos-Crop` 的 `copyPixelMap()`（MIT）。
+ */
+async function clonePixelMap(pm: image.PixelMap): Promise<image.PixelMap> {
+  const info = pm.getImageInfoSync();
+  const bytes: ArrayBuffer = new ArrayBuffer(pm.getPixelBytesNumber());
+  await pm.readPixelsToBuffer(bytes);
+  const opts: image.InitializationOptions = {
+    size: { width: info.size.width, height: info.size.height },
+    srcPixelFormat: info.pixelFormat,
+    pixelFormat: image.PixelMapFormat.RGBA_8888,
+    editable: true
+  };
+  return image.createPixelMap(bytes, opts);
+}
 
 /**
  * ImageEditor —— DIY 图片编辑器（全屏，三页共用）
@@ -91,6 +114,18 @@ export struct ImageEditor {
    * 旧位图必须释放，否则每操作一次泄漏一张全分辨率图（约 8MB/次）。
    */
   private scope: PixelScope = new PixelScope();
+  /**
+   * 底图（问题四：滤镜/纹理要"从底图重算"，而不是在当前位上层层叠加）
+   *
+   *  - `basePixelMap` = 底图：只烘焙几何（旋转/翻转/裁剪），**不含**滤镜/纹理；
+   *  - `curPixelMap` = 显示/导出用的成品：底图 → 滤镜 → 纹理。
+   *
+   * 于是"同一个滤镜再点一次"= 清掉滤镜回到原图色，换滤镜也不会叠色。
+   * 底图有独立的作用域：它不参与"当前显示位图"的替换，否则换滤镜时会把它顺手释放掉。
+   * 代价是多一份全分辨率位图常驻（1080×1920 ≈ 8MB），这是非破坏式管线必须付的成本。
+   */
+  private baseScope: PixelScope = new PixelScope();
+  private basePixelMap: image.PixelMap | undefined = undefined;
   /**
    * 是否有未保存的修改：旋转/翻转/裁剪/滤镜/纹理/文字/贴纸任一操作后置 true。
    * 关闭编辑器时据此弹出确认，避免返回手势一滑就丢掉全部创作。
@@ -150,6 +185,7 @@ export struct ImageEditor {
       this.backId = -1;
     }
     this.scope.dispose();
+    this.baseScope.dispose();
   }
 
   /**
@@ -239,7 +275,11 @@ export struct ImageEditor {
       const info = pm.getImageInfoSync();
       this.model.canvas.imageW = info.size.width;
       this.model.canvas.imageH = info.size.height;
-      this.curPixelMap = this.scope.setCurrent(pm);
+      // 解码结果就是"几何基准"：滤镜/纹理都从它重算（重载即复位滤镜链）
+      this.basePixelMap = this.baseScope.setCurrent(await this.toEditableRgba(pm));
+      this.filterName = NO_FILTER;
+      this.textureName = NO_TEXTURE;
+      await this.refreshFromBase(false);
     } catch (e) {
       console.error(`loadOriginal failed: ${JSON.stringify(e)}`);
       promptAction.showToast({ message: '图片加载失败' });
@@ -248,25 +288,69 @@ export struct ImageEditor {
     }
   }
 
-  /** 操作后克隆位图（触发 Image 刷新）—— 保留原像素格式，避免旋转/翻转后通道错位掉色 */
-  private async refreshPixelMap(): Promise<void> {
-    const pm: image.PixelMap | undefined = this.curPixelMap;
-    if (pm === undefined) {
+  /**
+   * 从底图重新推导"显示位图"：底图 → 滤镜 → 纹理
+   *
+   * - 滤镜链为空时只做一份副本：Image 组件要换到新的 PixelMap 句柄才会重绘；
+   * - 有滤镜/纹理时按顺序重跑（先滤镜后纹理，与旧行为一致），结果恒为 RGBA_8888；
+   * - 所有"换滤镜/换纹理/旋转/翻转/裁剪"都走这里，保证画面永远等于"底图 + 当前滤镜链"。
+   *
+   * @param markEdit 是否算一次未保存修改（几何/滤镜操作 true；加载/重置 false）
+   */
+  private async refreshFromBase(markEdit: boolean): Promise<void> {
+    const base: image.PixelMap | undefined = this.basePixelMap;
+    if (base === undefined) {
       return;
     }
-    // 从位图本身读取真实像素格式（可能是 BGRA_8888 等），重建时保留，不硬编码 RGBA
+    const w: number = this.model.canvas.imageW;
+    const h: number = this.model.canvas.imageH;
+    try {
+      if (this.filterName === NO_FILTER && this.textureName === NO_TEXTURE) {
+        this.curPixelMap = this.scope.setCurrent(await clonePixelMap(base));
+      } else {
+        this.processing = true;
+        try {
+          let bytes: ArrayBuffer = new ArrayBuffer(base.getPixelBytesNumber());
+          await base.readPixelsToBuffer(bytes);
+          if (this.filterName !== NO_FILTER) {
+            const filtered: object = await taskpool.execute(runFilterTask, bytes, w, h, this.filterName);
+            bytes = filtered as ArrayBuffer;
+          }
+          if (this.textureName !== NO_TEXTURE) {
+            const textured: object = await taskpool.execute(runTextureTask, bytes, w, h,
+              this.textureName, this.textureStrength);
+            bytes = textured as ArrayBuffer;
+          }
+          // commitBytes 内部会 setCurrent + 标脏
+          await this.commitBytes(bytes);
+        } finally {
+          this.processing = false;
+        }
+      }
+      if (markEdit) {
+        this.dirty = true;
+      }
+    } catch (e) {
+      console.error(`refreshFromBase failed: ${JSON.stringify(e)}`);
+      promptAction.showToast({ message: '图片处理失败，请重试' });
+    }
+  }
+
+  /**
+   * 把位图归一化成"可编辑的 RGBA_8888"
+   *
+   * 为什么要归一化：滤镜是 TaskPool 里的逐像素计算，它**按 RGBA 解释字节**；
+   * 而解码出来的位图可能是 BGRA_8888 —— 直接喂给滤镜就会通道错位（掉色）。
+   * 已经是 RGBA 时原样返回（不做多余拷贝）；发生转换时**原图会被释放**。
+   */
+  private async toEditableRgba(pm: image.PixelMap): Promise<image.PixelMap> {
     const info = pm.getImageInfoSync();
-    const bytes: ArrayBuffer = new ArrayBuffer(pm.getPixelBytesNumber());
-    await pm.readPixelsToBuffer(bytes);
-    const opts: image.InitializationOptions = {
-      size: { width: info.size.width, height: info.size.height },
-      pixelFormat: info.pixelFormat,
-      editable: true
-    };
-    // 旧图交给作用域延迟释放（Image 组件可能还在用旧句柄绘制）
-    this.curPixelMap = this.scope.setCurrent(await image.createPixelMap(bytes, opts));
-    // 旋转/翻转/裁剪都会走到这里 → 标记有未保存修改
-    this.dirty = true;
+    if (info.pixelFormat === image.PixelMapFormat.RGBA_8888) {
+      return pm;
+    }
+    const converted: image.PixelMap = await clonePixelMap(pm);
+    PixelScope.safeRelease(pm);
+    return converted;
   }
 
   /** 用处理后的字节生成新 PixelMap */
@@ -282,36 +366,37 @@ export struct ImageEditor {
   }
 
   async rotateImage(angle: number): Promise<void> {
-    const pm: image.PixelMap | undefined = this.curPixelMap;
-    if (pm === undefined) {
+    // 几何烘焙进**底图**，滤镜/纹理随后从底图重算（旋转不会丢滤镜，也不会叠色）
+    const base: image.PixelMap | undefined = this.basePixelMap;
+    if (base === undefined) {
       return;
     }
     const oldW: number = this.model.canvas.imageW;
     const oldH: number = this.model.canvas.imageH;
     const dispOld: DispRect = this.dispRect();
-    await pm.rotate(angle);
+    await base.rotate(angle);
     const tmp: number = this.model.canvas.imageW;
     this.model.canvas.imageW = this.model.canvas.imageH;
     this.model.canvas.imageH = tmp;
     // 文字/贴纸锚点随画面旋转（旋转后尺寸互换）
     this.remapOverlays((p: LayerPoint): LayerPoint => mapRotate(p, angle, oldW, oldH),
       dispOld, oldH, oldW);
-    await this.refreshPixelMap();
+    await this.refreshFromBase(true);
   }
 
   async flip(horizontal: boolean, vertical: boolean): Promise<void> {
-    const pm: image.PixelMap | undefined = this.curPixelMap;
-    if (pm === undefined) {
+    const base: image.PixelMap | undefined = this.basePixelMap;
+    if (base === undefined) {
       return;
     }
     const oldW: number = this.model.canvas.imageW;
     const oldH: number = this.model.canvas.imageH;
     const dispOld: DispRect = this.dispRect();
-    await pm.flip(horizontal, vertical);
+    await base.flip(horizontal, vertical);
     // 翻转不改尺寸，图层只做镜像
     this.remapOverlays((p: LayerPoint): LayerPoint => mapFlip(p, horizontal, vertical, oldW, oldH),
       dispOld, oldW, oldH);
-    await this.refreshPixelMap();
+    await this.refreshFromBase(true);
   }
 
   /**
@@ -356,8 +441,8 @@ export struct ImageEditor {
     // 重置后画面就是原图，图层侧的 dirty 跟着清掉（父组件的 dirty 保持原样，
     // 与旧行为一致：此前编辑过再点重置，关闭时仍会确认）
     this.model.layers.markClean();
-    this.filterName = '原图';
-    this.textureName = '';
+    this.filterName = NO_FILTER;
+    this.textureName = NO_TEXTURE;
     this.model.canvas.cropVisible = false;
     this.loadOriginal();
   }
@@ -471,8 +556,9 @@ export struct ImageEditor {
   }
 
   async applyCrop(): Promise<void> {
-    const pm: image.PixelMap | undefined = this.curPixelMap;
-    if (pm === undefined || !this.model.canvas.cropVisible) {
+    // 裁的是**底图**（几何）：滤镜/纹理随后从新底图重算，效果不会丢
+    const base: image.PixelMap | undefined = this.basePixelMap;
+    if (base === undefined || !this.model.canvas.cropVisible) {
       return;
     }
     const dispOld: DispRect = this.dispRect();
@@ -485,11 +571,12 @@ export struct ImageEditor {
     this.processing = true;
     try {
       // 与 UI 同一套变换在离屏画布上重绘 → 缩放/平移/旋转都被正确带进结果
-      const res: CropComposeResult = await composeCropToPixelMap(pm, oldW, oldH, rect, view,
+      const res: CropComposeResult = await composeCropToPixelMap(base, oldW, oldH, rect, view,
         CanvasSpec.MAX_LONG_EDGE);
       this.model.canvas.imageW = res.width;
       this.model.canvas.imageH = res.height;
-      this.curPixelMap = this.scope.setCurrent(res.pixelMap);
+      // 裁剪产物来自离屏画布：归一化成可编辑的 RGBA 底图，后续旋转/翻转才能原地改
+      this.basePixelMap = this.baseScope.setCurrent(await this.toEditableRgba(res.pixelMap));
       // 图层锚点重映射：旧图像素 → 屏幕(vp) → 输出画布像素 → 新图像素
       // （乘 canvasScale 抵消长边护栏带来的额外缩放）
       const dispNew: DispRect = this.dispRect();
@@ -501,7 +588,7 @@ export struct ImageEditor {
       }, dispOld, this.model.canvas.imageW, this.model.canvas.imageH);
       // 提交后退出裁剪态并复位（选区、比例、图片变换）
       this.model.canvas.clearCrop();
-      await this.refreshPixelMap();
+      await this.refreshFromBase(true);
       promptAction.showToast({ message: '已裁剪 ✅' });
     } catch (e) {
       console.error(`applyCrop failed: ${JSON.stringify(e)}`);
@@ -527,14 +614,16 @@ export struct ImageEditor {
   // ==================== 滤镜 ====================
 
   /**
-   * 应用滤镜：逐像素计算放到 TaskPool 工作线程（FilterTask.runFilterTask），
+   * 应用滤镜：从**底图**重算（问题四），逐像素计算放到 TaskPool 工作线程，
    * 只跨线程传 ArrayBuffer，不传 PixelMap；处理中显示遮罩并屏蔽重复点击。
+   *
+   * 再点一次当前滤镜 = 取消（回到原图色）；换一个滤镜 = 换掉，不叠色。
    */
   async applyFilter(name: string): Promise<void> {
-    if (name === '原图') {
-      // 恢复原图后同步复位滤镜/纹理选中态（像素被重载，旧效果已不存在）
-      this.filterName = '原图';
-      this.textureName = '';
+    if (name === NO_FILTER) {
+      // 恢复原图：重新解码文件（几何/滤镜/纹理一起复位，与旧行为一致）
+      this.filterName = NO_FILTER;
+      this.textureName = NO_TEXTURE;
       // 若之前裁剪过，重载会改变底图尺寸，图层锚点按比例回射到新底图
       const oldW: number = this.model.canvas.imageW;
       const oldH: number = this.model.canvas.imageH;
@@ -553,31 +642,19 @@ export struct ImageEditor {
     if (this.processing) {
       return;
     }
-    const pm: image.PixelMap | undefined = this.curPixelMap;
-    if (pm === undefined) {
+    if (this.basePixelMap === undefined) {
       return;
     }
-    try {
-      this.processing = true;
-      const bytes: ArrayBuffer = new ArrayBuffer(pm.getPixelBytesNumber());
-      await pm.readPixelsToBuffer(bytes);
-      const result: object = await taskpool.execute(runFilterTask, bytes,
-        this.model.canvas.imageW, this.model.canvas.imageH, name);
-      await this.commitBytes(result as ArrayBuffer);
-      this.filterName = name;
-    } catch (e) {
-      console.error(`applyFilter failed: ${JSON.stringify(e)}`);
-      promptAction.showToast({ message: '滤镜处理失败，请重试' });
-    } finally {
-      this.processing = false;
-    }
+    // 再点一次当前滤镜 = 取消（回原图色），换一个 = 换掉，不叠色
+    this.filterName = toggleFilter(this.filterName, name);
+    await this.refreshFromBase(true);
   }
 
   // ==================== 纹理叠加 ====================
 
   /**
-   * 应用纹理：逐像素计算放到 TaskPool 工作线程（FilterTask.runTextureTask）。
-   * 纹理叠加在当前位图（已含滤镜）上，强度取 textureStrength。
+   * 应用纹理：同样从底图重算 —— 管线是"底图 → 滤镜 → 纹理"，强度取 textureStrength。
+   * 再点一次当前纹理 = 取消。
    */
   async applyTexture(name: string): Promise<void> {
     if (name === '') {
@@ -586,24 +663,11 @@ export struct ImageEditor {
     if (this.processing) {
       return;
     }
-    const pm: image.PixelMap | undefined = this.curPixelMap;
-    if (pm === undefined) {
+    if (this.basePixelMap === undefined) {
       return;
     }
-    try {
-      this.processing = true;
-      const bytes: ArrayBuffer = new ArrayBuffer(pm.getPixelBytesNumber());
-      await pm.readPixelsToBuffer(bytes);
-      const result: object = await taskpool.execute(runTextureTask, bytes,
-        this.model.canvas.imageW, this.model.canvas.imageH, name, this.textureStrength);
-      await this.commitBytes(result as ArrayBuffer);
-      this.textureName = name;
-    } catch (e) {
-      console.error(`applyTexture failed: ${JSON.stringify(e)}`);
-      promptAction.showToast({ message: '纹理处理失败，请重试' });
-    } finally {
-      this.processing = false;
-    }
+    this.textureName = toggleTexture(this.textureName, name);
+    await this.refreshFromBase(true);
   }
 
   // ==================== 文字与艺术字 ====================
@@ -1158,8 +1222,12 @@ export struct ImageEditor {
                   Slider({ value: this.textureStrength, min: 10, max: 100, step: 5 })
                     .width('50%')
                     .selectedColor('#FF6B6B')
-                    .onChange((v: number) => {
+                    .onChange((v: number, mode: SliderChangeMode) => {
                       this.textureStrength = v;
+                      // 松手才重跑纹理：拖动中每帧跑一次 TaskPool 太贵（且管线是从底图重算的）
+                      if (mode === SliderChangeMode.End && this.textureName !== '' && !this.processing) {
+                        this.refreshFromBase(true);
+                      }
                     })
                   Text(`${this.textureStrength}%`)
                     .fontSize(12)
