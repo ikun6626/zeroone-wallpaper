@@ -69,6 +69,9 @@ export struct CanvasView {
   @State textSizeLive: number = 1;
   @State stickerSizeIdx: number = -1;
   @State stickerSizeLive: number = 1;
+  /** 贴纸旋转的实时值（把手拖动 / 双指旋转期间生效） */
+  @State stickerAngleIdx: number = -1;
+  @State stickerAngleLive: number = 0;
   /** 缩放滑杆的垂直偏移换算（纯函数，见 ImageEditor.sliderOffsetFor） */
   offsetForSlider: (baseSize: number, scale: number) => number =
     (baseSize: number, scale: number): number => (baseSize * scale) / 2 + 40;
@@ -95,6 +98,49 @@ export struct CanvasView {
   private baseScale: number = 1;
   /** 贴纸旋转基准角（度） */
   private baseAngle: number = 0;
+  /** 旋转把手拖动时的指针基准角（相对贴纸中心，度） */
+  private rotatePointerBaseAngle: number = 0;
+  /** 当前选中贴纸的全局中心（onAreaChange 记录，供 atan2 使用） */
+  private stickerCenterX: number = 0;
+  private stickerCenterY: number = 0;
+
+  /** 贴纸当前渲染角度：交互中读实时值，其余时候读 store */
+  private stickerAngleFor(s: StickerItem, idx: number): number {
+    return this.stickerAngleIdx === idx ? this.stickerAngleLive : s.angle;
+  }
+
+  /** 归一化到 (-180, 180] */
+  private normalizeAngle(angle: number): number {
+    let next: number = angle;
+    while (next > 180) {
+      next -= 360;
+    }
+    while (next <= -180) {
+      next += 360;
+    }
+    return next;
+  }
+
+  /** 0 / ±90 / ±180 附近 5° 内吸附，让“正放”更容易摆准 */
+  private snapStickerAngle(angle: number): number {
+    const targets: number[] = [-180, -90, 0, 90, 180];
+    for (let i = 0; i < targets.length; i++) {
+      if (Math.abs(angle - targets[i]) <= 5) {
+        return targets[i];
+      }
+    }
+    return angle;
+  }
+
+  /** 指针相对贴纸中心的角度（屏幕 Y 轴向下，结果与 rotate 的顺时针角一致） */
+  private pointerAngle(globalX: number, globalY: number): number {
+    return Math.atan2(globalY - this.stickerCenterY, globalX - this.stickerCenterX) * 180 / Math.PI;
+  }
+
+  /** 贴纸显示盒的实时半边长（65 = 130 / 2），用于定位旋转把手 */
+  private stickerHalfSizeFor(s: StickerItem, idx: number): number {
+    return 65 * (this.stickerSizeIdx === idx ? this.stickerSizeLive : s.scale);
+  }
 
   /** 文字阴影（按风格：0=无 1=阴影 2=发光 3=描边） */
   private textShadowFor(t: TextItem): ShadowOptions | ShadowOptions[] {
@@ -307,8 +353,8 @@ export struct CanvasView {
           .width(130 * (this.stickerSizeIdx === idx ? this.stickerSizeLive : s.scale))
           .height(130 * (this.stickerSizeIdx === idx ? this.stickerSizeLive : s.scale))
           .objectFit(ImageFit.Contain)
-          // 贴纸自身旋转（与工作台/画板一致的 双指旋转 能力）
-          .rotate({ angle: s.angle })
+          // 贴纸自身旋转：拖把手 / 双指旋转期间优先读组件级实时值
+          .rotate({ angle: this.stickerAngleFor(s, idx) })
         if (this.layers.selectedSticker() === idx) {
           Text('✕')
             .fontSize(14)
@@ -324,14 +370,90 @@ export struct CanvasView {
             .onClick(() => {
               this.onRemoveSticker(idx);
             })
+          // 旋转把手 + 摆正：放在贴纸上方，跟随本体实时位移
+          Row({ space: 6 }) {
+            Stack() {
+              Text('⟳')
+                .fontSize(16)
+                .fontColor('#333333')
+                .textAlign(TextAlign.Center)
+            }
+            .width(30)
+            .height(30)
+            .borderRadius(15)
+            .backgroundColor('#FFFFFF')
+            .border({ width: 1, color: '#DDDDDD' })
+            .responseRegion({ x: -10, y: -10, width: 50, height: 50 })
+            .gesture(
+              PanGesture()
+                .onActionStart((e: GestureEvent) => {
+                  this.onSelectSticker(idx);
+                  // 先复位实时槽位，再读 store 里的角度，避免读到上一次手势的残留值
+                  this.stickerAngleIdx = -1;
+                  this.stickerAngleLive = s.angle;
+                  this.stickerAngleIdx = idx;
+                  this.baseAngle = s.angle;
+                  const finger: FingerInfo | undefined = e.fingerList.length > 0
+                    ? e.fingerList[0] : undefined;
+                  if (finger !== undefined) {
+                    this.rotatePointerBaseAngle = this.pointerAngle(finger.globalX, finger.globalY);
+                  }
+                })
+                .onActionUpdate((e: GestureEvent) => {
+                  const finger: FingerInfo | undefined = e.fingerList.length > 0
+                    ? e.fingerList[0] : undefined;
+                  if (finger === undefined) {
+                    return;
+                  }
+                  const delta: number = this.pointerAngle(finger.globalX, finger.globalY)
+                    - this.rotatePointerBaseAngle;
+                  const next: number = this.snapStickerAngle(
+                    this.normalizeAngle(this.baseAngle + delta));
+                  this.stickerAngleLive = next;
+                  this.layers.setStickerAngle(idx, next);
+                  this.onLayersChanged();
+                })
+                .onActionEnd(() => {
+                  this.stickerAngleIdx = -1;
+                })
+            )
+            Text('摆正')
+              .fontSize(12)
+              .fontColor('#333333')
+              .height(30)
+              .padding({ left: 10, right: 10 })
+              .backgroundColor('#FFFFFF')
+              .borderRadius(15)
+              .border({ width: 1, color: '#DDDDDD' })
+              .onClick(() => {
+                this.onSelectSticker(idx);
+                this.stickerAngleIdx = idx;
+                this.stickerAngleLive = 0;
+                this.layers.setStickerAngle(idx, 0);
+                this.onLayersChanged();
+                this.stickerAngleIdx = -1;
+              })
+          }
+          .position({
+            x: this.stickerHalfSizeFor(s, idx) - 42,
+            y: -26
+          })
         }
       }
       // 选中态虚线边框
       .border(this.layers.selectedSticker() === idx
         ? { width: 1, color: '#FF6B6B', style: BorderStyle.Dashed } : { width: 0 })
+      // 记录选中贴纸的全局中心：旋转把手拖动时用它算 atan2
+      .onAreaChange((oldValue: Area, newValue: Area) => {
+        if (this.layers.selectedSticker() === idx) {
+          this.stickerCenterX = (newValue.globalPosition.x as number)
+            + (newValue.width as number) / 2;
+          this.stickerCenterY = (newValue.globalPosition.y as number)
+            + (newValue.height as number) / 2;
+        }
+      })
 
-      // 选中态控件（大小 + 旋转）同样作为**兄弟节点**渲染（见下方），
-      // 放进本体里会把本体撑高，导致选中时位置与导出位置不一致。
+      // 尺寸滑杆作为**兄弟节点**渲染：放进本体里会把本体撑高，导致选中时位置偏移。
     }
     .hitTestBehavior(HitTestMode.Block)
     .backgroundColor(Color.Transparent)
@@ -389,28 +511,30 @@ export struct CanvasView {
         })
     )
     .parallelGesture(
-      // 双指旋转贴纸：此前编辑器贴纸根本转不了（工作台/画板都能转，体验割裂）
+      // 双指旋转贴纸：保留原有手势，渲染也走组件级实时值
       RotationGesture()
         .onActionStart(() => {
           this.onSelectSticker(idx);
+          // 先复位实时槽位，再读 store 里的角度，避免读到上一次手势的残留值
+          this.stickerAngleIdx = -1;
+          this.stickerAngleLive = s.angle;
+          this.stickerAngleIdx = idx;
           this.baseAngle = s.angle;
         })
         .onActionUpdate((e: GestureEvent) => {
           // 基准角 + 手势角（用累加会对不上手指，这是之前文字拖动踩过的坑）
-          let next: number = this.baseAngle + e.angle;
-          // 归一化到 (-180, 180]，避免角度无限增大
-          while (next > 180) {
-            next -= 360;
-          }
-          while (next <= -180) {
-            next += 360;
-          }
+          const next: number = this.snapStickerAngle(
+            this.normalizeAngle(this.baseAngle + e.angle));
+          this.stickerAngleLive = next;
           this.layers.setStickerAngle(idx, next);
           this.onLayersChanged();
         })
+        .onActionEnd(() => {
+          this.stickerAngleIdx = -1;
+        })
     )
 
-    // 选中态控件（兄弟节点）：大小 + 旋转，精确可控且不影响本体位置
+    // 选中态尺寸控件（兄弟节点）：精确可控且不影响本体位置
     if (this.layers.selectedSticker() === idx) {
       Column({ space: 2 }) {
         Row({ space: 4 }) {
@@ -429,22 +553,9 @@ export struct CanvasView {
             })
           Text('□').fontSize(18).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
         }
-        Row({ space: 4 }) {
-          Text('⟳').fontSize(12).fontColor('#999999')
-          Slider({ value: s.angle, min: -180, max: 180, step: 1, style: SliderStyle.OutSet })
-            .layoutWeight(1)
-            .blockColor('#FF6B6B')
-            .selectedColor('#FF6B6B')
-            .trackColor('#E0E0E0')
-            .onChange((val: number) => {
-              this.layers.setStickerAngle(idx, val);
-              this.onLayersChanged();
-            })
-          Text('⟳').fontSize(16).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
-        }
       }
       .width(170)
-      // 同上：贴纸的"大小 / 旋转"控件要跟着贴纸本体一起移动
+      // 同上：贴纸的大小控件要跟着贴纸本体一起移动
       .translate({
         x: s.x + this.layers.liveDx(LayerKind.STICKER, idx),
         // 用实时尺寸算偏移：否则拉大小时控件会与贴纸本体脱开
