@@ -3,6 +3,50 @@
  */
 import { HandleBase, DispRect, CropRect } from './EditorModels';
 import { CROP_MIN } from './EditorConstants';
+import { LayerPoint } from './LayerGeometry';
+
+/**
+ * CropView —— 裁剪态的"视图侧"参数（与 ImageEditor 的状态一一对应）
+ *
+ * 关键约定（此前三个 bug 的根源都在这条约定上）：
+ *  图片始终按 **预览区** 做 contain 适配（`disp`），用户缩放/平移/旋转都发生在这个坐标系里：
+ *      screen = C + k · R(θ) · (disp.origin + (u,v)·s − C) + offset
+ *  其中 C = 预览区中心，s = disp.scale（vp/源像素），k = 用户缩放，u,v = 源图像素。
+ *  如果图片改成"按选区适配"，display 尺寸一变图片就自己跳，且这套逆运算全部失效。
+ */
+export interface CropView {
+  disp: DispRect;
+  previewW: number;
+  previewH: number;
+  /** 用户缩放倍数（cropScale） */
+  scale: number;
+  /** 用户平移（cropOffsetX，vp） */
+  offsetX: number;
+  /** 用户平移（cropOffsetY，vp） */
+  offsetY: number;
+  /** 旋转角度（度，顺时针为正） */
+  angle: number;
+}
+
+/** 裁剪输出尺寸（源图像素） */
+export interface CropSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * 离屏绘制参数：把源图按与 UI **完全相同** 的变换画进输出画布，
+ * 使选区左上角恰好落在画布 (0,0)，画布尺寸 = cropOutputSize。
+ */
+export interface CropDrawTransform {
+  /** 平移（输出画布像素） */
+  tx: number;
+  ty: number;
+  /** 源图 1 像素 → 输出画布像素的倍数 */
+  scale: number;
+  /** 旋转弧度（顺时针为正，与 Canvas rotate 一致） */
+  radians: number;
+}
 
 /** 裁剪比例文案转宽/高数值，自由裁剪返回 0 */
 export function cropRatioValue(ratio: string): number {
@@ -142,4 +186,68 @@ export function calcCropRect(base: HandleBase, type: number, dx: number, dy: num
   }
 
   return { x: left, y: top, w: w, h: h };
+}
+
+/** 选区上 1 vp 对应多少源图像素（= disp.scale × 用户缩放）；这也是输出画布的像素比 */
+function cropPixelRatio(view: CropView): number {
+  const s: number = view.disp.scale > 0 ? view.disp.scale : 1;
+  const k: number = view.scale > 0 ? view.scale : 1;
+  return s * k;
+}
+
+/**
+ * 裁剪输出尺寸：选区在源图像素下的实际尺寸
+ *
+ * 这张图与"选区看起来多大"无关，只由源图密度决定 —— 用户放大到 2 倍再裁一小块，
+ * 得到的是那一小块的原分辨率图像，而不是被放大后的模糊图。
+ */
+export function cropOutputSize(rect: CropRect, view: CropView): CropSize {
+  const m: number = cropPixelRatio(view);
+  return {
+    width: Math.max(1, Math.round(rect.w / m)),
+    height: Math.max(1, Math.round(rect.h / m))
+  };
+}
+
+/**
+ * 计算离屏绘制参数（cropOutputSize 的配套）
+ *
+ * 推导：屏幕上图片原点 = C + k·R(θ)·(disp.origin − C) + offset；
+ * 输出画布原点取选区左上角，因此整体减去 rect.origin。
+ */
+export function cropDrawTransform(rect: CropRect, view: CropView): CropDrawTransform {
+  const k: number = view.scale > 0 ? view.scale : 1;
+  const cx: number = view.previewW / 2;
+  const cy: number = view.previewH / 2;
+  const radians: number = view.angle * Math.PI / 180;
+  const cos: number = Math.cos(radians);
+  const sin: number = Math.sin(radians);
+  const dx: number = view.disp.x - cx;
+  const dy: number = view.disp.y - cy;
+  const ax: number = cx + k * (dx * cos - dy * sin) + view.offsetX;
+  const ay: number = cy + k * (dx * sin + dy * cos) + view.offsetY;
+  return {
+    tx: ax - rect.x,
+    ty: ay - rect.y,
+    scale: cropPixelRatio(view),
+    radians: radians
+  };
+}
+
+/**
+ * 输出画布像素 → 源图像素（cropDrawTransform 的逆运算）
+ *
+ * 用途：裁剪后把文字/贴纸的锚点从旧图像素换算到新图像素。
+ * 此前用 `mapCrop` 简单减偏移，只有在"没缩放、没旋转"时才碰巧正确。
+ */
+export function unprojectCrop(x: number, y: number, t: CropDrawTransform): LayerPoint {
+  const dx: number = x - t.tx;
+  const dy: number = y - t.ty;
+  const cos: number = Math.cos(-t.radians);
+  const sin: number = Math.sin(-t.radians);
+  const m: number = t.scale > 0 ? t.scale : 1;
+  return {
+    x: (dx * cos - dy * sin) / m,
+    y: (dx * sin + dy * cos) / m
+  };
 }

@@ -7,7 +7,7 @@ import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { taskpool } from '@kit.ArkTS';
 import { Wallpaper } from '../../model/Wallpaper';
 import { runFilterTask, runTextureTask } from '../editor/FilterTask';
-import { TextItem, StickerItem, HandleBase, DispRect } from '../editor/EditorModels';
+import { TextItem, StickerItem, HandleBase, DispRect, CropRect } from '../editor/EditorModels';
 import {
   BASE_FILTERS,
   STYLE_FILTERS,
@@ -18,18 +18,25 @@ import {
   THEME_PHRASES,
   QUOTE_PHRASES
 } from '../editor/EditorConstants';
-import { calcCropRect, cropRatioValue } from '../editor/CropGeometry';
+import {
+  calcCropRect,
+  cropRatioValue,
+  CropView,
+  CropDrawTransform,
+  cropDrawTransform,
+  unprojectCrop
+} from '../editor/CropGeometry';
 import {
   toAnchor,
   fromAnchor,
   clampAnchor,
-  mapCrop,
   mapRotate,
   mapFlip,
   LayerPoint
 } from '../editor/LayerGeometry';
-import { composeToJpeg } from '../editor/ImageComposer';
+import { composeToJpeg, composeCropToPixelMap, CropComposeResult } from '../editor/ImageComposer';
 import { PixelScope } from '../utils/PixelScope';
+import { CanvasSpec } from '../canvas/CanvasSpec';
 import { EditGuard } from '../utils/EditGuard';
 
 /**
@@ -113,8 +120,6 @@ export struct ImageEditor {
   @State cropAngle: number = 0;
 
   /** 手势基准 */
-  private panStartX: number = 0;
-  private panStartY: number = 0;
   private textBaseX: number = 0;
   private textBaseY: number = 0;
   private textBaseScale: number = 1;
@@ -443,32 +448,38 @@ export struct ImageEditor {
     if (pm === undefined || !this.cropVisible) {
       return;
     }
+    const dispOld: DispRect = this.dispRect();
+    const oldW: number = this.curW;
+    const oldH: number = this.curH;
+    const rect: CropRect = { x: this.cropX, y: this.cropY, w: this.cropW, h: this.cropH };
+    const view: CropView = {
+      disp: dispOld,
+      previewW: this.previewW,
+      previewH: this.previewH,
+      scale: this.cropScale,
+      offsetX: this.cropOffsetX,
+      offsetY: this.cropOffsetY,
+      angle: this.cropAngle
+    };
+    const t: CropDrawTransform = cropDrawTransform(rect, view);
+    this.processing = true;
     try {
-      const disp = this.dispRect();
-      // 逆变换：选区坐标 → 图片像素坐标（考虑 cropOffset/scale）
-      // 1. 选区中心在"无偏移坐标系"中的位置
-      const cx: number = this.cropX + this.cropW / 2 - this.cropOffsetX;
-      const cy: number = this.cropY + this.cropH / 2 - this.cropOffsetY;
-      // 2. 有效缩放 = 显示缩放 × 用户缩放
-      const effectiveScale: number = disp.scale * this.cropScale;
-      // 3. 选区对应的像素尺寸
-      let pw: number = Math.round(this.cropW / effectiveScale);
-      let ph: number = Math.round(this.cropH / effectiveScale);
-      // 4. 像素左上角
-      let px: number = Math.round((cx - this.cropW / 2 - disp.x) / effectiveScale);
-      let py: number = Math.round((cy - this.cropH / 2 - disp.y) / effectiveScale);
-      // 5. 边界约束（确保不越界）
-      px = Math.max(0, Math.min(px, this.curW - 1));
-      py = Math.max(0, Math.min(py, this.curH - 1));
-      pw = Math.max(1, Math.min(pw, this.curW - px));
-      ph = Math.max(1, Math.min(ph, this.curH - py));
-      const region: image.Region = { x: px, y: py, size: { width: pw, height: ph } };
-      await pm.crop(region);
-      // disp 即裁剪前的显示矩形，图层锚点据此换算
-      this.curW = pw;
-      this.curH = ph;
+      // 与 UI 同一套变换在离屏画布上重绘 → 缩放/平移/旋转都被正确带进结果
+      const res: CropComposeResult = await composeCropToPixelMap(pm, oldW, oldH, rect, view,
+        CanvasSpec.MAX_LONG_EDGE);
+      this.curW = res.width;
+      this.curH = res.height;
+      this.curPixelMap = this.scope.setCurrent(res.pixelMap);
       this.invalidateDisp();
-      this.remapOverlays((p: LayerPoint): LayerPoint => mapCrop(p, px, py), disp, pw, ph);
+      // 图层锚点重映射：旧图像素 → 屏幕(vp) → 输出画布像素 → 新图像素
+      // （乘 canvasScale 抵消长边护栏带来的额外缩放）
+      const dispNew: DispRect = this.dispRect();
+      const toOutput: number = dispNew.scale > 0 ? 1 / (dispNew.scale * res.canvasScale) : 1;
+      this.remapOverlays((p: LayerPoint): LayerPoint => {
+        const sx: number = dispOld.x + p.x * dispOld.scale;
+        const sy: number = dispOld.y + p.y * dispOld.scale;
+        return unprojectCrop((sx - dispNew.x) * toOutput, (sy - dispNew.y) * toOutput, t);
+      }, dispOld, this.curW, this.curH);
       this.cropVisible = false;
       this.cropRatio = '自由';
       this.cropOffsetX = 0;
@@ -478,17 +489,13 @@ export struct ImageEditor {
       await this.refreshPixelMap();
       promptAction.showToast({ message: '已裁剪 ✅' });
     } catch (e) {
+      console.error(`applyCrop failed: ${JSON.stringify(e)}`);
       promptAction.showToast({ message: '裁剪失败，请重试' });
       this.cropVisible = false;
+    } finally {
+      this.processing = false;
     }
   }
-
-  private onCropFrameDrag(e: GestureEvent): void {
-    const disp = this.dispRect();
-    this.cropX = Math.max(disp.x, Math.min(disp.x + disp.w - this.cropW, this.panStartX + e.offsetX));
-    this.cropY = Math.max(disp.y, Math.min(disp.y + disp.h - this.cropH, this.panStartY + e.offsetY));
-  }
-
   /**
    * 四角手柄拖拽：几何计算在 CropGeometry.calcCropRect 纯函数中，
    * type 0=左上 1=右上 2=左下 3=右下（对边固定，固定比例联动宽高）
@@ -911,32 +918,41 @@ export struct ImageEditor {
               // 选区内 clip 容器：只有这个区域内的图片可见
               // 图片可拖动/缩放（苹果照片式：手指在选区内拖动图片，选区框固定不动）
               Stack() {
-                Image(this.curPixelMap)
-                  .width('100%')
-                  .height('100%')
-                  .objectFit(ImageFit.Contain)
-                  .translate({ x: this.cropOffsetX, y: this.cropOffsetY })
-                  .scale({ x: this.cropScale, y: this.cropScale })
-                  .rotate({ angle: this.cropAngle })
-                  .gesture(
-                    PanGesture()
-                      .onActionStart(() => {
-                        this.cropPanBaseX = this.cropOffsetX;
-                        this.cropPanBaseY = this.cropOffsetY;
-                      })
-                      .onActionUpdate((e: GestureEvent) => {
-                        this.onCropImageDrag(e);
-                      })
-                  )
-                  .parallelGesture(
-                    PinchGesture()
-                      .onActionStart(() => {
-                        this.cropPinchBase = this.cropScale;
-                      })
-                      .onActionUpdate((e: GestureEvent) => {
-                        this.onCropImagePinch(e);
-                      })
-                  )
+                // 内层容器 = 整个预览区的坐标系：图片在这里按 Contain 适配（与 dispRect 一致），
+                // 再整体反向平移，选区之外的部分由外层 clip 裁掉。
+                // 此前图片是直接按"选区尺寸"适配的 —— 选区一变图片就自己跳，
+                // 而且与裁剪换算对不上，这正是"框住的"和"裁出来的"不是一块的根因之一。
+                Stack() {
+                  Image(this.curPixelMap)
+                    .width('100%')
+                    .height('100%')
+                    .objectFit(ImageFit.Contain)
+                    .translate({ x: this.cropOffsetX, y: this.cropOffsetY })
+                    .scale({ x: this.cropScale, y: this.cropScale })
+                    .rotate({ angle: this.cropAngle })
+                    .gesture(
+                      PanGesture()
+                        .onActionStart(() => {
+                          this.cropPanBaseX = this.cropOffsetX;
+                          this.cropPanBaseY = this.cropOffsetY;
+                        })
+                        .onActionUpdate((e: GestureEvent) => {
+                          this.onCropImageDrag(e);
+                        })
+                    )
+                    .parallelGesture(
+                      PinchGesture()
+                        .onActionStart(() => {
+                          this.cropPinchBase = this.cropScale;
+                        })
+                        .onActionUpdate((e: GestureEvent) => {
+                          this.onCropImagePinch(e);
+                        })
+                    )
+                }
+                .width(this.previewW)
+                .height(this.previewH)
+                .position({ x: -this.cropX, y: -this.cropY })
               }
               .width(this.cropW)
               .height(this.cropH)
@@ -977,6 +993,7 @@ export struct ImageEditor {
               .width(20)
               .height(20)
               .position({ x: this.cropX - 2, y: this.cropY - 2 })
+              .responseRegion({ x: -12, y: -12, width: 44, height: 44 })
               .gesture(
                 PanGesture()
                   .onActionStart(() => {
@@ -994,6 +1011,7 @@ export struct ImageEditor {
               .width(20)
               .height(20)
               .position({ x: this.cropX + this.cropW - 18, y: this.cropY - 2 })
+              .responseRegion({ x: -12, y: -12, width: 44, height: 44 })
               .gesture(
                 PanGesture()
                   .onActionStart(() => {
@@ -1011,6 +1029,7 @@ export struct ImageEditor {
               .width(20)
               .height(20)
               .position({ x: this.cropX - 2, y: this.cropY + this.cropH - 18 })
+              .responseRegion({ x: -12, y: -12, width: 44, height: 44 })
               .gesture(
                 PanGesture()
                   .onActionStart(() => {
@@ -1028,6 +1047,7 @@ export struct ImageEditor {
               .width(20)
               .height(20)
               .position({ x: this.cropX + this.cropW - 18, y: this.cropY + this.cropH - 18 })
+              .responseRegion({ x: -12, y: -12, width: 44, height: 44 })
               .gesture(
                 PanGesture()
                   .onActionStart(() => {
@@ -1043,6 +1063,7 @@ export struct ImageEditor {
               Column()
                 .width(30).height(3).borderRadius(1.5).backgroundColor(Color.White)
                 .position({ x: this.cropX + this.cropW / 2 - 15, y: this.cropY - 2 })
+                .responseRegion({ x: -18, y: -14, width: 66, height: 31 })
                 .gesture(
                   PanGesture()
                     .onActionStart(() => {
@@ -1056,6 +1077,7 @@ export struct ImageEditor {
               Column()
                 .width(3).height(30).borderRadius(1.5).backgroundColor(Color.White)
                 .position({ x: this.cropX + this.cropW - 2, y: this.cropY + this.cropH / 2 - 15 })
+                .responseRegion({ x: -14, y: -18, width: 31, height: 66 })
                 .gesture(
                   PanGesture()
                     .onActionStart(() => {
@@ -1069,6 +1091,7 @@ export struct ImageEditor {
               Column()
                 .width(30).height(3).borderRadius(1.5).backgroundColor(Color.White)
                 .position({ x: this.cropX + this.cropW / 2 - 15, y: this.cropY + this.cropH - 2 })
+                .responseRegion({ x: -18, y: -14, width: 66, height: 31 })
                 .gesture(
                   PanGesture()
                     .onActionStart(() => {
@@ -1082,6 +1105,7 @@ export struct ImageEditor {
               Column()
                 .width(3).height(30).borderRadius(1.5).backgroundColor(Color.White)
                 .position({ x: this.cropX - 2, y: this.cropY + this.cropH / 2 - 15 })
+                .responseRegion({ x: -14, y: -18, width: 31, height: 66 })
                 .gesture(
                   PanGesture()
                     .onActionStart(() => {

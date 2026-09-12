@@ -22,9 +22,19 @@
  * 通过 dispRect 的 scale 换算为图片像素；字号/贴纸盒边长同样除以 scale。
  */
 import { image } from '@kit.ImageKit';
-import { TextItem, StickerItem, DispRect } from './EditorModels';
+import { TextItem, StickerItem, DispRect, CropRect } from './EditorModels';
 import { toAnchor, LayerPoint } from './LayerGeometry';
 import { ViewTransform, ViewMath, Rect } from '../canvas/ViewTransform';
+import { CropView, CropSize, CropDrawTransform, cropOutputSize, cropDrawTransform } from './CropGeometry';
+
+/** 裁剪合成结果：像素图（所有权交给调用方）与实际输出尺寸 */
+export interface CropComposeResult {
+  pixelMap: image.PixelMap;
+  width: number;
+  height: number;
+  /** 长边护栏带来的额外缩放（输出画布像素 / 未受限输出像素），换算图层锚点时要用 */
+  canvasScale: number;
+}
 
 /** UI 端文字基准字号（fontSize = TEXT_BASE_FONT * scale，单位 vp） */
 const TEXT_BASE_FONT: number = 22;
@@ -323,4 +333,41 @@ export async function composeCoverToJpeg(base: image.PixelMap, baseW: number, ba
     outPm.release();
     packer.release();
   }
+}
+
+// 裁剪合成 —— 把选区那块内容按源图密度取出来（"所见即所裁"的唯一出处）
+//
+// 做法：在离屏画布上按与 UI 完全相同的变换画一遍源图（含缩放、平移、旋转），
+// 画布原点对齐到选区左上角，于是画布内容 = 用户框住的那一块。
+//
+// 为什么不用 PixelMap.crop(region)：
+//  1. crop 只接受轴对齐矩形，用户一旦缩放过/旋转过就得自己算逆向映射；
+//     上一版正是漏了"绕预览中心缩放"这一项，所以"框住的"和"裁出来的"不是一块；
+//  2. 这里复用 cropDrawTransform()，正向/逆向同一套公式，且带单元测试。
+//
+// 返回的 PixelMap 所有权交给调用方（调用方负责 release）；canvasScale 是长边护栏
+// 带来的额外缩放（4096 以内的常规图恒为 1），换算文字/贴纸锚点时要乘上它。
+export async function composeCropToPixelMap(base: image.PixelMap, baseW: number, baseH: number,
+  rect: CropRect, view: CropView, maxLongEdge: number): Promise<CropComposeResult> {
+  const t: CropDrawTransform = cropDrawTransform(rect, view);
+  const size: CropSize = cropOutputSize(rect, view);
+  const limited: Size = ViewMath.limitLongEdge(size.width, size.height, maxLongEdge);
+  const cap: number = size.width > 0 ? limited.width / size.width : 1;
+
+  const canvas: OffscreenCanvas = new OffscreenCanvas(limited.width, limited.height);
+  const settings: RenderingContextSettings = new RenderingContextSettings(true);
+  const ctx: OffscreenCanvasRenderingContext2D = canvas.getContext('2d', settings);
+
+  // 旋转时画布四角会露出底色，先铺黑，避免出现透明块
+  ctx.fillStyle = 'rgba(0,0,0,1)';
+  ctx.fillRect(0, 0, limited.width, limited.height);
+  ctx.save();
+  ctx.translate(t.tx * cap, t.ty * cap);
+  ctx.rotate(t.radians);
+  ctx.scale(t.scale * cap, t.scale * cap);
+  ctx.drawImage(base, 0, 0, baseW, baseH);
+  ctx.restore();
+
+  const outPm: image.PixelMap = ctx.getPixelMap(0, 0, limited.width, limited.height);
+  return { pixelMap: outPm, width: limited.width, height: limited.height, canvasScale: cap };
 }
