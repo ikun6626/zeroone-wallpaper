@@ -1,5 +1,6 @@
 import { image } from '@kit.ImageKit';
-import { TextItem, StickerItem } from '../editor/EditorModels';
+import { TextItem, StickerItem, DispRect } from '../editor/EditorModels';
+import { TEXT_COLORS } from '../editor/EditorConstants';
 import { ObservableCanvasState, ObservableLayerStore } from '../editor/EditorCanvasModel';
 import { LayerKind } from '../editor/LayerStore';
 
@@ -204,13 +205,21 @@ export struct CanvasView {
           this.onSelectText(idx);
         })
         .onActionUpdate((e: GestureEvent) => {
-          const limitX: number = this.state.previewW / 2 + 60;
-          const limitY: number = this.state.previewH / 2 + 60;
+          // 按底图实际显示区域夹紧图层中心：disp 是图片在预览区里的真实矩形（vp），
+          // 坐标轴上 translate 是相对预览中心的偏移，所以要先减掉 previewW/2。
+          // 这样文字不会再被拖进 contain/cover 之外的灰色留白。
+          const disp: DispRect = this.state.disp;
+          const limitX: number = Math.max(0, disp.w) / 2;
+          const limitY: number = Math.max(0, disp.h) / 2;
+          const centerX: number = disp.x + disp.w / 2 - this.state.previewW / 2;
+          const centerY: number = disp.y + disp.h / 2 - this.state.previewH / 2;
           // 拖动中只更新实时增量：此前是"改 t.x/t.y → refreshTexts()"，
           // 而 refreshTexts 会换掉数组引用，于是每一帧都重建全部文字节点。
           this.layers.updateDrag(
-            Math.max(-limitX - this.dragBaseX, Math.min(limitX - this.dragBaseX, e.offsetX)),
-            Math.max(-limitY - this.dragBaseY, Math.min(limitY - this.dragBaseY, e.offsetY)));
+            Math.max(centerX - limitX - this.dragBaseX,
+              Math.min(centerX + limitX - this.dragBaseX, e.offsetX)),
+            Math.max(centerY - limitY - this.dragBaseY,
+              Math.min(centerY + limitY - this.dragBaseY, e.offsetY)));
         })
         .onActionEnd(() => {
           // 松手才提交一次（store 内部同时复位实时增量）
@@ -254,6 +263,32 @@ export struct CanvasView {
         x: t.x + this.layers.liveDx(LayerKind.TEXT, idx),
         y: t.y + this.layers.liveDy(LayerKind.TEXT, idx)
           + this.offsetForSlider(22, this.textSizeIdx === idx ? this.textSizeLive : t.scale)
+      })
+
+      // 选中态基础色板：六个圆点，白描边表示当前色；同样作为兄弟节点跟随实时位移
+      Row({ space: 8 }) {
+        ForEach(TEXT_COLORS, (c: string, colorIdx: number) => {
+          Column()
+            .width(18)
+            .height(18)
+            .borderRadius(9)
+            .backgroundColor(c)
+            .border({
+              width: 1,
+              color: t.color === c ? Color.White : Color.Transparent
+            })
+            .onClick(() => {
+              this.layers.setTextColor(colorIdx, c);
+              this.onLayersChanged();
+            })
+        }, (c: string) => c)
+      }
+      .justifyContent(FlexAlign.Center)
+      .width(150)
+      .translate({
+        x: t.x + this.layers.liveDx(LayerKind.TEXT, idx),
+        y: t.y + this.layers.liveDy(LayerKind.TEXT, idx)
+          + this.offsetForSlider(22, this.textSizeIdx === idx ? this.textSizeLive : t.scale) + 32
       })
     }
   }
@@ -314,13 +349,27 @@ export struct CanvasView {
           this.onSelectSticker(idx);
         })
         .onActionUpdate((e: GestureEvent) => {
-          // 夹紧到画面内（避免把贴纸拖出可视区域）后再换算成实时增量：
-          // 拖动中仍然只写标量，不碰图层数组
-          const half: number = 65 * s.scale;
-          const bx: number = Math.max(20, this.state.previewW / 2 - half);
-          const by: number = Math.max(20, this.state.previewH / 2 - half);
-          const nx: number = Math.max(-bx, Math.min(bx, this.dragBaseX + e.offsetX));
-          const ny: number = Math.max(-by, Math.min(by, this.dragBaseY + e.offsetY));
+          // 夹紧到**底图实际显示区域**内：本体有 padding，且贴纸是 130x130 的 Contain 盒，
+          // 所以半宽/半高用"显示盒一半 + 本体 padding"近似，避免贴纸边缘被拖出图片区域。
+          // 贴纸被拉得比图片还大时，下限可能反过来；这里用 min/max 收敛成同一个边界，
+          // 保证至少能停在图片中心一侧，而不是夹到越拖越远。
+          const sDisp: DispRect = this.state.disp;
+          const halfX: number = 65 * s.scale + 18;
+          const halfY: number = 65 * s.scale + 12;
+          const dispHalfW: number = Math.max(0, sDisp.w) / 2;
+          const dispHalfH: number = Math.max(0, sDisp.h) / 2;
+          const dispCenterX: number = sDisp.x + sDisp.w / 2 - this.state.previewW / 2;
+          const dispCenterY: number = sDisp.y + sDisp.h / 2 - this.state.previewH / 2;
+          let xMin: number = dispCenterX - dispHalfW + halfX;
+          let xMax: number = dispCenterX + dispHalfW - halfX;
+          let yMin: number = dispCenterY - dispHalfH + halfY;
+          let yMax: number = dispCenterY + dispHalfH - halfY;
+          xMin = Math.min(xMin, xMax);
+          xMax = Math.max(xMin, xMax);
+          yMin = Math.min(yMin, yMax);
+          yMax = Math.max(yMin, yMax);
+          const nx: number = Math.max(xMin, Math.min(xMax, this.dragBaseX + e.offsetX));
+          const ny: number = Math.max(yMin, Math.min(yMax, this.dragBaseY + e.offsetY));
           this.layers.updateDrag(nx - this.dragBaseX, ny - this.dragBaseY);
         })
         .onActionEnd(() => {
