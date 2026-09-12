@@ -1,0 +1,56 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\gao\\.ohos\\config\\default_zeroone_Pt8mbrBVv5EvnNrbKEgxI7aBt997b1qAdTE4r8XBswE=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "<REDACTED>",
+          "profile": "C:\\Users\\gao\\.ohos\\config\\default_zeroone_Pt8mbrBVv5EvnNrbKEgxI7aBt997b1qAdTE4r8XBswE=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\gao\\.ohos\\config\\default_zeroone_Pt8mbrBVv5EvnNrbKEgxI7aBt997b1qAdTE4r8XBswE=.p12",
+          "storePassword": "<REDACTED>"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "targetSdkVersion": "6.1.1(24)",
+        "compatibleSdkVersion": "6.1.1(24)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug",
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

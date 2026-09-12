@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "ZeroOne壁纸"
+    },
+    {
+      "name": "read_media_reason",
+      "value": "用于选择本地图片上传为壁纸"
+    }
+  ]
+}
