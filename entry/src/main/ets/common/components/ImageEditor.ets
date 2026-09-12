@@ -17,7 +17,8 @@ import {
   TEXT_COLORS,
   TEXT_STYLES,
   THEME_PHRASES,
-  QUOTE_PHRASES
+  QUOTE_PHRASES,
+  FIT_MODE_CONTAIN
 } from '../editor/EditorConstants';
 import {
   calcCropRect,
@@ -452,6 +453,23 @@ export struct ImageEditor {
     this.model.canvas.clearCrop();
   }
 
+  /**
+   * 切换画布适配档位。
+   * 铺满是壁纸默认；完整显示用 contain，CanvasView 会补模糊底图。
+   * 切换后立即刷新 disp；若正处于裁剪态，则按新的可视图片区域重建选区。
+   */
+  setFitMode(mode: string): void {
+    if (this.model.canvas.fitMode === mode) {
+      return;
+    }
+    this.model.canvas.fitMode = mode;
+    this.dispRect();
+    if (this.model.canvas.cropVisible) {
+      this.selectCropRatio(this.model.canvas.cropRatio);
+    }
+    this.dirty = true;
+  }
+
   // ==================== 裁剪 ====================
   // 裁剪手势由 CanvasView 回报位移（dx/dy/scale），几何一律留在这里：
   // 选区计算走 CropGeometry.calcCropRect，图片变换直接写 CanvasState —— 不出现第二套坐标换算。
@@ -497,21 +515,31 @@ export struct ImageEditor {
   private dispKeyH: number = -1;
   private dispKeyImageW: number = -1;
   private dispKeyImageH: number = -1;
+  private dispKeyFit: string = '';
 
   private dispRect(): DispRect {
     const cw: number = this.model.canvas.previewW;
     const ch: number = this.model.canvas.previewH;
     const iw: number = this.model.canvas.imageW;
     const ih: number = this.model.canvas.imageH;
+    const fitMode: string = this.model.canvas.fitMode;
     if (this.dispKeyW === cw && this.dispKeyH === ch
-      && this.dispKeyImageW === iw && this.dispKeyImageH === ih) {
+      && this.dispKeyImageW === iw && this.dispKeyImageH === ih
+      && this.dispKeyFit === fitMode) {
       return this.dispCache;
     }
     let next: DispRect;
     if (iw <= 0 || ih <= 0 || cw <= 0 || ch <= 0) {
       next = { x: 0, y: 0, w: cw, h: ch, scale: 1 };
-    } else {
+    } else if (fitMode === FIT_MODE_CONTAIN) {
+      // 完整显示：短边贴齐，得到 letterbox 后的实际图片区域
       const scale: number = Math.min(cw / iw, ch / ih);
+      const w: number = iw * scale;
+      const h: number = ih * scale;
+      next = { x: (cw - w) / 2, y: (ch - h) / 2, w: w, h: h, scale: scale };
+    } else {
+      // 铺满：长边贴齐，超出预览区的部分表示被 cover 裁掉
+      const scale: number = Math.max(cw / iw, ch / ih);
       const w: number = iw * scale;
       const h: number = ih * scale;
       next = { x: (cw - w) / 2, y: (ch - h) / 2, w: w, h: h, scale: scale };
@@ -521,9 +549,30 @@ export struct ImageEditor {
     this.dispKeyH = ch;
     this.dispKeyImageW = iw;
     this.dispKeyImageH = ih;
+    this.dispKeyFit = fitMode;
     // 显示矩形是画布状态的一部分（裁剪换算要读它）：写回 model.canvas，不另存副本
     this.model.canvas.disp = next;
     return next;
+  }
+
+  /**
+   * 裁剪选区可用的可视图片区域：disp 与预览区的交集。
+   * contain 时就是 letterbox 后的图片区域；cover 时是预览可视区。
+   * 但裁剪合成的坐标系仍使用完整 disp（见 cropView），保证源图密度正确。
+   */
+  private visibleDispRect(): DispRect {
+    const disp: DispRect = this.dispRect();
+    const left: number = Math.max(disp.x, 0);
+    const top: number = Math.max(disp.y, 0);
+    const right: number = Math.min(disp.x + disp.w, this.model.canvas.previewW);
+    const bottom: number = Math.min(disp.y + disp.h, this.model.canvas.previewH);
+    return {
+      x: left,
+      y: top,
+      w: Math.max(0, right - left),
+      h: Math.max(0, bottom - top),
+      scale: disp.scale
+    };
   }
 
   /**
@@ -533,7 +582,7 @@ export struct ImageEditor {
    */
   selectCropRatio(ratio: string): void {
     this.model.canvas.cropRatio = ratio;
-    const disp: DispRect = this.dispRect();
+    const disp: DispRect = this.visibleDispRect();
     let w: number = disp.w;
     let h: number = disp.h;
     if (ratio !== '自由') {
@@ -604,7 +653,7 @@ export struct ImageEditor {
    */
   private onCropHandleDrag(type: number, dx: number, dy: number): void {
     const rect: CropRect = calcCropRect(this.handleBase, type, dx, dy,
-      this.dispRect(), cropRatioValue(this.model.canvas.cropRatio));
+      this.visibleDispRect(), cropRatioValue(this.model.canvas.cropRatio));
     this.model.canvas.cropX = rect.x;
     this.model.canvas.cropY = rect.y;
     this.model.canvas.cropW = rect.w;
@@ -980,6 +1029,9 @@ export struct ImageEditor {
               onLayersChanged: (): void => {
                 this.dirty = true;
               },
+              onFitModeChanged: (mode: string): void => {
+                this.setFitMode(mode);
+              },
               onCropDragStart: (): void => {
                 this.onCropDragStart();
               },
@@ -1026,6 +1078,8 @@ export struct ImageEditor {
             // 预览区尺寸是画布状态的一部分（裁剪换算要读它）：写进 model.canvas，不做副本
             this.model.canvas.previewW = newValue.width as number;
             this.model.canvas.previewH = newValue.height as number;
+            // 预览区尺寸变化后立即重算 disp，图层夹紧与裁剪边界才能拿到最新矩形
+            this.dispRect();
           })
 
           // ===== 工具 tab（横向滚动，防止 chip 被截断） =====

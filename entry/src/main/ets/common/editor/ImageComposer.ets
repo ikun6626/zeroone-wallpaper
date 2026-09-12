@@ -23,6 +23,7 @@
  */
 import { image } from '@kit.ImageKit';
 import { TextItem, StickerItem, DispRect, CropRect } from './EditorModels';
+import { FIT_MODE_CONTAIN, FIT_MODE_COVER } from './EditorConstants';
 import { toAnchor, LayerPoint } from './LayerGeometry';
 import { ViewTransform, ViewMath, Rect } from '../canvas/ViewTransform';
 import {
@@ -320,16 +321,39 @@ export async function composeToJpeg(base: image.PixelMap, baseW: number, baseH: 
  * @param canvasH  画布高（px）
  * @param t        归一化变换（缩放 + 归一化平移；预览侧由 vp 位移换算而来）
  * @param quality  JPEG 质量 1~100
+ * @param fitMode  画布档位：cover=铺满，contain=完整显示（模糊底图填充留白）
  */
 export async function composeCoverToJpeg(base: image.PixelMap, baseW: number, baseH: number,
-  canvasW: number, canvasH: number, t: ViewTransform, quality: number): Promise<ArrayBuffer> {
+  canvasW: number, canvasH: number, t: ViewTransform, quality: number,
+  fitMode: string = FIT_MODE_COVER): Promise<ArrayBuffer> {
   const canvas: OffscreenCanvas = new OffscreenCanvas(canvasW, canvasH);
   const settings: RenderingContextSettings = new RenderingContextSettings(true);
   const ctx: OffscreenCanvasRenderingContext2D = canvas.getContext('2d', settings);
 
-  // 底图按 cover + 缩放/平移铺满画布（超出部分自然被画布裁掉 = 用户看到的取景）
-  const d: Rect = ViewMath.drawRect(baseW, baseH, canvasW, canvasH, t);
-  ctx.drawImage(base, d.x, d.y, d.width, d.height);
+  if (fitMode === FIT_MODE_CONTAIN) {
+    // 完整显示：先用同一张图 cover 铺满并高斯模糊，作为画布底色；
+    // 这样横图/方图在竖屏画布上也不会出现纯黑或纯灰边。
+    const coverScale: number = Math.max(canvasW / baseW, canvasH / baseH);
+    const bgW: number = baseW * coverScale;
+    const bgH: number = baseH * coverScale;
+    const bgX: number = (canvasW - bgW) / 2;
+    const bgY: number = (canvasH - bgH) / 2;
+    ctx.filter = 'blur(24px)';
+    ctx.drawImage(base, 0, 0, baseW, baseH, bgX, bgY, bgW, bgH);
+    ctx.filter = 'none';
+
+    // 再按 contain 等比缩放画完整图片；t.scale 保留用户放大语义。
+    const containScale: number = Math.min(canvasW / baseW, canvasH / baseH) * t.scale;
+    const dw: number = baseW * containScale;
+    const dh: number = baseH * containScale;
+    const dx: number = (canvasW - dw) / 2 + t.offsetX * canvasW;
+    const dy: number = (canvasH - dh) / 2 + t.offsetY * canvasH;
+    ctx.drawImage(base, 0, 0, baseW, baseH, dx, dy, dw, dh);
+  } else {
+    // 铺满：底图按 cover + 缩放/平移铺满画布，超出部分自然被画布裁掉
+    const d: Rect = ViewMath.drawRect(baseW, baseH, canvasW, canvasH, t);
+    ctx.drawImage(base, d.x, d.y, d.width, d.height);
+  }
 
   const outPm: image.PixelMap = ctx.getPixelMap(0, 0, canvasW, canvasH);
   const packer: image.ImagePacker = image.createImagePacker();
@@ -353,6 +377,8 @@ export async function composeCoverToJpeg(base: image.PixelMap, baseW: number, ba
 //
 // 返回的 PixelMap 所有权交给调用方（调用方负责 release）；canvasScale 是长边护栏
 // 带来的额外缩放（4096 以内的常规图恒为 1），换算文字/贴纸锚点时要乘上它。
+// 注意：view.disp 必须由调用方按当前画布档位（cover/contain）生成。
+// 本函数不重复做适配，因此裁剪结果天然跟随“铺满 / 完整显示”的预览语义。
 export async function composeCropToPixelMap(base: image.PixelMap, baseW: number, baseH: number,
   rect: CropRect, view: CropView, maxLongEdge: number): Promise<CropComposeResult> {
   const size: CropSize = cropOutputSize(rect, view);

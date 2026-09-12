@@ -3,6 +3,7 @@ import { TextItem, StickerItem, DispRect } from '../editor/EditorModels';
 import { TEXT_COLORS } from '../editor/EditorConstants';
 import { ObservableCanvasState, ObservableLayerStore } from '../editor/EditorCanvasModel';
 import { LayerKind } from '../editor/LayerStore';
+import { FIT_MODE_CONTAIN, FIT_MODE_COVER } from '../editor/EditorConstants';
 
 /**
  * 裁剪覆盖层配色（集中一处，方便以后做暗色模式/主题化）
@@ -90,6 +91,8 @@ export struct CanvasView {
   onCropPinchUpdate: (scale: number) => void = () => {};
   onCropHandleStart: () => void = () => {};
   onCropHandleDrag: (type: number, dx: number, dy: number) => void = () => {};
+  /** 切换“铺满 / 完整显示”；disp 与导出语义由父组件统一刷新 */
+  onFitModeChanged: (mode: string) => void = () => {};
 
   /** 拖动基准：手势开始时的图层位置（vp 偏移） */
   private dragBaseX: number = 0;
@@ -142,6 +145,26 @@ export struct CanvasView {
     return 65 * (this.stickerSizeIdx === idx ? this.stickerSizeLive : s.scale);
   }
 
+  /**
+   * 图层可见边界：底图显示矩形与预览区的交集。
+   * contain 时等于 letterbox 后的图片区域；cover 时等于预览可视区，
+   * 避免图层被拖到“被 cover 裁掉”的不可见区域。
+   */
+  private visibleDisp(): DispRect {
+    const d: DispRect = this.state.disp;
+    const left: number = Math.max(d.x, 0);
+    const top: number = Math.max(d.y, 0);
+    const right: number = Math.min(d.x + d.w, this.state.previewW);
+    const bottom: number = Math.min(d.y + d.h, this.state.previewH);
+    return {
+      x: left,
+      y: top,
+      w: Math.max(0, right - left),
+      h: Math.max(0, bottom - top),
+      scale: d.scale
+    };
+  }
+
   /** 文字阴影（按风格：0=无 1=阴影 2=发光 3=描边） */
   private textShadowFor(t: TextItem): ShadowOptions | ShadowOptions[] {
     if (t.style === 1) {
@@ -185,6 +208,22 @@ export struct CanvasView {
       .backgroundColor(CROP_HANDLE_FILL)
       .border({ width: CROP_HANDLE_EDGE_WIDTH, color: CROP_HANDLE_EDGE })
       .position({ x: x, y: y })
+  }
+
+  /** 画布适配档位按钮：铺满（壁纸默认）/ 完整显示 */
+  @Builder
+  fitChip(label: string, mode: string) {
+    Text(label)
+      .fontSize(11)
+      .fontColor(this.state.fitMode === mode ? Color.White : '#333333')
+      .backgroundColor(this.state.fitMode === mode ? '#D9111114' : '#D9FFFFFF')
+      .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+      .borderRadius(14)
+      .onClick(() => {
+        if (this.state.fitMode !== mode) {
+          this.onFitModeChanged(mode);
+        }
+      })
   }
 
   /**
@@ -254,7 +293,7 @@ export struct CanvasView {
           // 按底图实际显示区域夹紧图层中心：disp 是图片在预览区里的真实矩形（vp），
           // 坐标轴上 translate 是相对预览中心的偏移，所以要先减掉 previewW/2。
           // 这样文字不会再被拖进 contain/cover 之外的灰色留白。
-          const disp: DispRect = this.state.disp;
+          const disp: DispRect = this.visibleDisp();
           const limitX: number = Math.max(0, disp.w) / 2;
           const limitY: number = Math.max(0, disp.h) / 2;
           const centerX: number = disp.x + disp.w / 2 - this.state.previewW / 2;
@@ -475,7 +514,7 @@ export struct CanvasView {
           // 所以半宽/半高用"显示盒一半 + 本体 padding"近似，避免贴纸边缘被拖出图片区域。
           // 贴纸被拉得比图片还大时，下限可能反过来；这里用 min/max 收敛成同一个边界，
           // 保证至少能停在图片中心一侧，而不是夹到越拖越远。
-          const sDisp: DispRect = this.state.disp;
+          const sDisp: DispRect = this.visibleDisp();
           const halfX: number = 65 * s.scale + 18;
           const halfY: number = 65 * s.scale + 12;
           const dispHalfW: number = Math.max(0, sDisp.w) / 2;
@@ -577,10 +616,19 @@ export struct CanvasView {
           // 此前图片是直接按"选区尺寸"适配的 —— 选区一变图片就自己跳，
           // 而且与裁剪换算对不上，这正是"框住的"和"裁出来的"不是一块的根因之一。
           Stack() {
+            if (this.state.fitMode === FIT_MODE_CONTAIN) {
+              Image(this.pixelMap)
+                .width('100%')
+                .height('100%')
+                .objectFit(ImageFit.Cover)
+                .blur(24)
+                .hitTestBehavior(HitTestMode.None)
+            }
             Image(this.pixelMap)
               .width('100%')
               .height('100%')
-              .objectFit(ImageFit.Contain)
+              .objectFit(this.state.fitMode === FIT_MODE_CONTAIN
+                ? ImageFit.Contain : ImageFit.Cover)
               .translate({ x: this.state.cropOffsetX, y: this.state.cropOffsetY })
               .scale({ x: this.state.cropScale, y: this.state.cropScale })
               .rotate({ angle: this.state.cropAngle })
@@ -815,11 +863,26 @@ export struct CanvasView {
           .hitTestBehavior(HitTestMode.None)
       }
       if (!(this.tool === 'crop' && this.state.cropVisible)) {
-        // 非裁剪态：图片不可移动
-        Image(this.pixelMap)
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Contain)
+        if (this.state.fitMode === FIT_MODE_CONTAIN) {
+          // 完整显示：先用图片自身做 cover 模糊底，避免 letterbox 露出纯黑/纯灰边
+          Image(this.pixelMap)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+            .blur(24)
+            .hitTestBehavior(HitTestMode.None)
+          // 再按 contain 显示完整图片
+          Image(this.pixelMap)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Contain)
+        } else {
+          // 铺满：壁纸默认语义，超出预览区的内容被裁掉
+          Image(this.pixelMap)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+        }
       }
 
       // 裁剪态下隐藏文字/贴纸：它们不参与裁剪，且会浮在选区上方抢走拖动手势
@@ -834,6 +897,15 @@ export struct CanvasView {
         ForEach(this.layers.stickers(), (s: StickerItem, idx: number) => {
           this.stickerLayer(s, idx)
         }, (s: StickerItem, idx: number) => idx.toString())
+      }
+
+      // 画布适配档位：放在内容层上方，裁剪态先隐藏，避免和裁剪把手抢位置
+      if (!(this.tool === 'crop' && this.state.cropVisible)) {
+        Row({ space: 6 }) {
+          this.fitChip('铺满', FIT_MODE_COVER)
+          this.fitChip('完整显示', FIT_MODE_CONTAIN)
+        }
+        .position({ x: 8, y: 8 })
       }
     }
     .width('100%')

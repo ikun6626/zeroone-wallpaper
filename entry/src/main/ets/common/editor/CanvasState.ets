@@ -1,5 +1,6 @@
 import { DispRect, CropRect } from './EditorModels';
 import { CropView } from './CropGeometry';
+import { FIT_MODE_COVER } from './EditorConstants';
 
 /**
  * CanvasState —— 画布侧状态（阶段 5 第 3c 步：跨组件传递的唯一状态对象）
@@ -21,6 +22,12 @@ export class CanvasState {
   /** 当前底图像素尺寸 */
   imageW: number = 0;
   imageH: number = 0;
+  /**
+   * 画布适配档位：cover = 铺满（壁纸默认）；contain = 完整显示。
+   * cover 时 disp 可能大于预览区（表示被裁掉的部分仍在图片上），
+   * contain 时 disp 就是 letterbox 后的实际图片区域。
+   */
+  fitMode: string = FIT_MODE_COVER;
   /** 图片在预览区内的显示矩形（vp） */
   disp: DispRect = { x: 0, y: 0, w: 0, h: 0, scale: 1 };
 
