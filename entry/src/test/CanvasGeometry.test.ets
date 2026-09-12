@@ -142,5 +142,18 @@ export default function canvasGeometryTest() {
       expect(small.width).assertEqual(1080);
       expect(small.height).assertEqual(2340);
     });
+
+    it('maxPan_matches_cover_overscan', 0, () => {
+      // 未放大：没有余量，手势只能用于下滑关闭
+      expect(ViewMath.maxPan(1, 1080)).assertClose(0, 1e-9);
+      expect(ViewMath.maxPan(0.5, 1080)).assertClose(0, 1e-9);
+      // 放大 2 倍：四周各多出半屏
+      expect(ViewMath.maxPan(2, 1080)).assertClose(540, 1e-9);
+      expect(ViewMath.maxPan(3, 2340)).assertClose(2340, 1e-9);
+      // 与 drawRect 的自洽性：放大后可用余量 == (绘制宽 - 画布宽) / 2
+      const t: ViewTransform = new ViewTransform(2, 0, 0);
+      const d: Rect = ViewMath.drawRect(1000, 4000, CW, CH, t);
+      expect(ViewMath.maxPan(2, CW) * 2).assertClose(d.width - CW, 1e-9);
+    });
   });
 }

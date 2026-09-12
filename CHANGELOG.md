@@ -4,6 +4,27 @@
 
 ---
 
+## 2026-09-12 阶段 2：预览铺满屏幕 + 保存比例双出口
+
+> 起因：实际运行反馈"图片不是 9:16，预览和保存为壁纸时还是原比例，很怪"。
+> 代码复核后确认是**两条独立成因**，不是同一个 bug。
+
+| 问题 | 根因 | 修复 |
+|---|---|---|
+| 预览比例怪、上下留黑边 | `ImagePreview` 用 `ImageFit.Contain` 完整显示原图，与"设为壁纸"后的实际效果完全不一致 | 改为 `ImageFit.Cover` **铺满屏幕**（预览即壁纸效果）；放大后拖动用 `ViewMath.maxPan()` 夹在可视余量内，永不露黑边 |
+| 存下来还是原比例 | `saveToAlbum()` 是把原图**下载后原样拷进相册**，与屏幕尺寸无关，全程没有任何合成 | 底部新增"铺满屏幕 / 原图比例"切换：铺满屏幕走 `composeCoverToJpeg()` 按设备屏幕像素离屏合成（cover + 当前缩放/平移 = 所见即所存）；原图比例直接落原始文件字节（完整原图、不裁切不缩放） |
+| 预览与导出构图可能对不上 | 预览侧与导出侧各写一套坐标 | 两侧共用 `ViewMath`：预览把 vp 位移归一化成 `ViewTransform`，导出用同一个 `drawRect()` 取景 |
+
+- 新增 `ImageComposer.composeCoverToJpeg(base, baseW, baseH, canvasW, canvasH, t, quality)`：按画布尺寸合成导出（原 `composeToJpeg` 保持不动，继续给编辑器用）。
+- 新增 `ViewMath.maxPan(scale, extent)`：cover 铺满后的最大可平移量 `(scale-1)*extent/2`，是预览夹紧手势的唯一出处，带单测。
+- `ImagePreview` 新增 `saveMode`（0 铺满屏幕 / 1 原图比例）、`frameW/frameH`（`onAreaChange` 记录预览区尺寸）与底部比例胶囊。
+
+验证：`hvigor … test` 13 个用例全绿；`clean` + 标准 `assembleHap` 通过。
+
+踩坑记录：**不带 `--incremental` 的 `assembleHap` 可能在最后一步报 `Error Code: 00308018`**，日志里是 `entry:default@SignHap is not an incremental task`，而同一份日志前面已经打印 `sign app success` 且 HAP 正常生成 —— 属于 hvigor 自身的记账 bug。按 `DELIVERY.md` 的标准命令（带 `--incremental`）重跑即通过；这也解释了文档里"hvigor 常以退出码 1 收尾"的旧记录。
+
+---
+
 ## 2026-09-12 阶段 1：统一画布几何层（common/canvas）
 
 > 起因：预览、编辑、导出各写一套坐标，导致"预览一种构图、存下来另一种"，且文字/贴纸位置换设备就漂移。

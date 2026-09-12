@@ -229,6 +229,18 @@ export class ViewMath {
     const k: number = maxLongEdge / longEdge;
     return { width: Math.round(width * k), height: Math.round(height * k) };
   }
+
+  /**
+   * 预览区里允许的最大平移量（vp / px 均可，只要与 `extent` 同单位）
+   *
+   * 依据：图片按 cover 铺满后尺寸恰好等于可视区，放大 `scale` 倍时四周各多出
+   * `(scale-1) * extent / 2`，这就是能拖动的余量；`scale <= 1` 时没有余量。
+   * 预览侧用它夹紧手势位移，保证图片永远盖满可视区、不露黑边。
+   */
+  static maxPan(scale: number, extent: number): number {
+    const s: number = (scale > 1) ? scale : 1;
+    return ((s - 1) * extent) / 2;
+  }
 }
 
 /**
