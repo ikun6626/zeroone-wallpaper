@@ -214,6 +214,10 @@ export function cropOutputSize(rect: CropRect, view: CropView): CropSize {
  *
  * 推导：屏幕上图片原点 = C + k·R(θ)·(disp.origin − C) + offset；
  * 输出画布原点取选区左上角，因此整体减去 rect.origin。
+ *
+ * ⚠️ 注意单位：返回的 tx/ty 是**预览坐标系（vp）**，scale 是"1 源像素 = 多少 vp"
+ * （= cropPixelRatio）。它描述的是一张 **vp 尺度**的画布。
+ * 输出画布是源图像素尺度（见 cropOutputSize），要换算一次才对得上 —— 见 cropComposeTransform。
  */
 export function cropDrawTransform(rect: CropRect, view: CropView): CropDrawTransform {
   const k: number = view.scale > 0 ? view.scale : 1;
@@ -231,6 +235,32 @@ export function cropDrawTransform(rect: CropRect, view: CropView): CropDrawTrans
     ty: ay - rect.y,
     scale: cropPixelRatio(view),
     radians: radians
+  };
+}
+
+/**
+ * 输出画布坐标系里的绘制变换 —— composeCropToPixelMap() 的唯一出处
+ *
+ * 与 cropDrawTransform 的区别只有单位：输出画布是**源图像素尺度**（cropOutputSize
+ * 把选区的 vp 尺寸除以 cropPixelRatio），而 cropDrawTransform 给的是 vp 尺度的平移
+ * 与"1 源像素 = 多少 vp"的比值。所以这里要再做一次
+ *     vp → 输出像素：1 vp = (1 / cropPixelRatio) 源像素 = (cap / cropPixelRatio) 画布像素
+ * 换算：画布 1:1 对应源像素（cap 是长边护栏带来的额外缩放）。
+ *
+ * 少了这一步会发生什么（就是"裁完只剩左上角一小块、四周一片黑"那个 bug）：
+ * 画布按源像素开好了（例如 1067×800），却用 vp 尺度的 scale（例如 0.3）去画，
+ * 结果源图只画到画布的三分之一不到，其余全是被 fillRect 铺的底色。
+ */
+export function cropComposeTransform(rect: CropRect, view: CropView, cap: number): CropDrawTransform {
+  const t: CropDrawTransform = cropDrawTransform(rect, view);
+  const m: number = cropPixelRatio(view);
+  // vp → 输出画布像素；m 理论上恒 > 0，这里只是防御退化输入
+  const k: number = m > 0 ? cap / m : cap;
+  return {
+    tx: t.tx * k,
+    ty: t.ty * k,
+    scale: cap,
+    radians: t.radians
   };
 }
 

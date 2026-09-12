@@ -25,7 +25,13 @@ import { image } from '@kit.ImageKit';
 import { TextItem, StickerItem, DispRect, CropRect } from './EditorModels';
 import { toAnchor, LayerPoint } from './LayerGeometry';
 import { ViewTransform, ViewMath, Rect } from '../canvas/ViewTransform';
-import { CropView, CropSize, CropDrawTransform, cropOutputSize, cropDrawTransform } from './CropGeometry';
+import {
+  CropView,
+  CropSize,
+  CropDrawTransform,
+  cropOutputSize,
+  cropComposeTransform
+} from './CropGeometry';
 
 /** 裁剪合成结果：像素图（所有权交给调用方）与实际输出尺寸 */
 export interface CropComposeResult {
@@ -349,10 +355,11 @@ export async function composeCoverToJpeg(base: image.PixelMap, baseW: number, ba
 // 带来的额外缩放（4096 以内的常规图恒为 1），换算文字/贴纸锚点时要乘上它。
 export async function composeCropToPixelMap(base: image.PixelMap, baseW: number, baseH: number,
   rect: CropRect, view: CropView, maxLongEdge: number): Promise<CropComposeResult> {
-  const t: CropDrawTransform = cropDrawTransform(rect, view);
   const size: CropSize = cropOutputSize(rect, view);
   const limited: Size = ViewMath.limitLongEdge(size.width, size.height, maxLongEdge);
   const cap: number = size.width > 0 ? limited.width / size.width : 1;
+  // 单位换算（vp → 输出像素）在 CropGeometry 里，这里只按"输出画布像素"画
+  const t: CropDrawTransform = cropComposeTransform(rect, view, cap);
 
   const canvas: OffscreenCanvas = new OffscreenCanvas(limited.width, limited.height);
   const settings: RenderingContextSettings = new RenderingContextSettings(true);
@@ -362,9 +369,9 @@ export async function composeCropToPixelMap(base: image.PixelMap, baseW: number,
   ctx.fillStyle = 'rgba(0,0,0,1)';
   ctx.fillRect(0, 0, limited.width, limited.height);
   ctx.save();
-  ctx.translate(t.tx * cap, t.ty * cap);
+  ctx.translate(t.tx, t.ty);
   ctx.rotate(t.radians);
-  ctx.scale(t.scale * cap, t.scale * cap);
+  ctx.scale(t.scale, t.scale);
   ctx.drawImage(base, 0, 0, baseW, baseH);
   ctx.restore();
 
