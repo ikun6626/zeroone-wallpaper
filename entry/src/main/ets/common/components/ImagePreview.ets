@@ -558,11 +558,14 @@ export struct ImagePreview {
       if (this.uiVisible) {
         Column({ space: 12 }) {
           // 磨砂胶囊工具栏：收藏 / 预览模式（普通→桌面→锁屏）/ 保存并设为壁纸 / 编辑
-          //  四件事全在一排，图标统一为白色；保存按钮是系统 SaveButton（授权必需），
-          //  但用 backgroundColor/iconColor/iconSize 抹掉了系统自带的底色，看起来和旁边一致。
+          //  四件事全在一排，图标统一用系统符号（SymbolGlyph）+ 同一个白色 + 同一号字，
+          //  不再混 emoji（emoji 自带颜色，四个图标永远凑不齐一套色调）。
+          // 保存按钮是系统 SaveButton（写相册的临时授权必需），用 backgroundColor/iconColor/iconSize
+          //  抹掉自带底色后，和这三个符号视觉一致。
           Row({ space: 28 }) {
-            // 收藏
-            Text(this.isFav ? '❤️' : '🤍')
+            // 收藏：实心/描边靠颜色区分（未收藏=白，已收藏=主题红）
+            SymbolGlyph($r('sys.symbol.heart'))
+              .fontColor([this.isFav ? '#FF6B6B' : '#F2F2F5'])
               .fontSize(22)
               .onClick(() => {
                 // 写入本地收藏，返回父页面时由 onClose 回调刷新心形状态
@@ -572,7 +575,9 @@ export struct ImagePreview {
 
             // 预览模式切换（普通→桌面→锁屏→普通）
             Stack() {
-              Text(this.previewMode === 'normal' ? '👁' : (this.previewMode === 'home' ? '📱' : '🔒'))
+              SymbolGlyph(this.previewMode === 'normal' ? $r('sys.symbol.picture')
+                : (this.previewMode === 'home' ? $r('sys.symbol.phone') : $r('sys.symbol.lock')))
+                .fontColor(['#F2F2F5'])
                 .fontSize(22)
             }
             .onClick(() => {
@@ -585,7 +590,9 @@ export struct ImagePreview {
             this.saveWallpaperButton()
 
             // 编辑
-            Text('✏️').fontSize(22)
+            SymbolGlyph($r('sys.symbol.paintpalette'))
+              .fontColor(['#F2F2F5'])
+              .fontSize(22)
               .onClick(() => { this.showEditor = true; })
           }
           .padding({ left: 20, right: 20, top: 10, bottom: 10 })

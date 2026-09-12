@@ -56,6 +56,18 @@ export struct CanvasView {
   @Link pixelMap: image.PixelMap | undefined;
   /** 当前工具（'crop' 等），裁剪态分支要用 */
   @Prop tool: string = 'transform';
+  /**
+   * 尺寸 / 角度的"实时值"（拉动滑杆期间生效）
+   *
+   * 为什么必须有：图层渲染读的是 `t.scale` / `s.scale`，而这些是普通对象字段，
+   * `libs` 里的 setTextScale 只是改了字段值，**不会触发重绘** —— 所以拉动滑杆时
+   * 文字/贴纸看起来"不动"。这里把实时值放进组件自己的 @State，
+   * 渲染时优先读它，状态变化才会真正驱动重绘。
+   */
+  @State textSizeIdx: number = -1;
+  @State textSizeLive: number = 1;
+  @State stickerSizeIdx: number = -1;
+  @State stickerSizeLive: number = 1;
   /** 缩放滑杆的垂直偏移换算（纯函数，见 ImageEditor.sliderOffsetFor） */
   offsetForSlider: (baseSize: number, scale: number) => number =
     (baseSize: number, scale: number): number => (baseSize * scale) / 2 + 40;
@@ -143,7 +155,8 @@ export struct CanvasView {
           // 显式用 vp：fontSize 传数字时默认单位是 fp（会跟随系统字体大小设置缩放），
           // 而导出按 vp→像素换算。用户把系统字体调大后，
           // 预览会变大、导出却不变 —— 这就是"所见非所得"。写死 vp 后两侧一致。
-          .fontSize(`${22 * t.scale}vp`)
+          // 优先读实时值：拖滑杆时 this.* 变化才会触发重绘（读 t.scale 不会）
+          .fontSize(`${22 * (this.textSizeIdx === idx ? this.textSizeLive : t.scale)}vp`)
           .fontColor(t.color)
           .fontWeight(FontWeight.Bold)
           .textShadow(this.textShadowFor(t))
@@ -225,6 +238,9 @@ export struct CanvasView {
           .selectedColor('#FF6B6B')
           .trackColor('#E0E0E0')
           .onChange((val: number) => {
+            // 先写实时值（驱动本组件重绘），再写 store（供导出使用）
+            this.textSizeIdx = idx;
+            this.textSizeLive = val;
             this.layers.setTextScale(idx, val);
             this.onLayersChanged();
           })
@@ -234,7 +250,8 @@ export struct CanvasView {
       // 拖动中滑杆要跟本体一起走：本体渲染用的是 t.x/t.y + 实时增量，这里必须加同一份
       .translate({
         x: t.x + this.layers.liveDx(LayerKind.TEXT, idx),
-        y: t.y + this.layers.liveDy(LayerKind.TEXT, idx) + this.offsetForSlider(22, t.scale)
+        y: t.y + this.layers.liveDy(LayerKind.TEXT, idx)
+          + this.offsetForSlider(22, this.textSizeIdx === idx ? this.textSizeLive : t.scale)
       })
     }
   }
@@ -249,8 +266,9 @@ export struct CanvasView {
     Column({ space: 4 }) {
       Stack() {
         Image(s.content)
-          .width(130 * s.scale)
-          .height(130 * s.scale)
+          // 同上：优先读实时值，否则拉滑杆时贴纸不会立刻变化
+          .width(130 * (this.stickerSizeIdx === idx ? this.stickerSizeLive : s.scale))
+          .height(130 * (this.stickerSizeIdx === idx ? this.stickerSizeLive : s.scale))
           .objectFit(ImageFit.Contain)
           // 贴纸自身旋转（与工作台/画板一致的 双指旋转 能力）
           .rotate({ angle: s.angle })
@@ -350,6 +368,9 @@ export struct CanvasView {
             .selectedColor('#FF6B6B')
             .trackColor('#E0E0E0')
             .onChange((val: number) => {
+              // 先写实时值（驱动重绘），再写 store
+              this.stickerSizeIdx = idx;
+              this.stickerSizeLive = val;
               this.layers.setStickerScale(idx, val);
               this.onLayersChanged();
             })
@@ -373,7 +394,9 @@ export struct CanvasView {
       // 同上：贴纸的"大小 / 旋转"控件要跟着贴纸本体一起移动
       .translate({
         x: s.x + this.layers.liveDx(LayerKind.STICKER, idx),
-        y: s.y + this.layers.liveDy(LayerKind.STICKER, idx) + this.offsetForSlider(130, s.scale)
+        // 用实时尺寸算偏移：否则拉大小时控件会与贴纸本体脱开
+        y: s.y + this.layers.liveDy(LayerKind.STICKER, idx)
+          + this.offsetForSlider(130, this.stickerSizeIdx === idx ? this.stickerSizeLive : s.scale)
       })
     }
   }
