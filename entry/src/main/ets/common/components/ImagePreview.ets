@@ -32,7 +32,8 @@ const DISMISS_THRESHOLD: number = 120;
  *  - 单击图片：工具栏/返回箭头在显示 ↔ 隐藏之间切换（沉浸式看图）
  *  - 双指捏合缩放；双击放大/还原；放大后单指拖动浏览
  *  - 未放大时左滑或下滑 → 带动画关闭
- *  - 保存比例可切换：铺满屏幕（按设备屏幕像素合成，默认）/ 原图比例（不裁切）
+ *  - 保存比例固定"铺满屏幕"（按设备屏幕像素合成 = 壁纸效果）；
+ *    比例胶囊已按产品要求收起 —— "设为锁屏/桌面"本来就只应该给铺满的图
  *  - 预览模式：普通 → iOS 桌面 → iOS 锁屏（模拟壁纸实际效果）
  */
 @Component
@@ -52,8 +53,6 @@ export struct ImagePreview {
   @State remoteFailed: boolean = false;
   @State saving: boolean = false;
   @State showEditor: boolean = false;
-  /** 保存比例：0 = 铺满屏幕（按画布合成）1 = 原图比例（原始文件，不裁切） */
-  @State saveMode: number = 0;
   /** 预览区尺寸（vp）：由 onAreaChange 记录，用于夹紧平移与归一化换算 */
   @State frameW: number = 0;
   @State frameH: number = 0;
@@ -239,22 +238,6 @@ export struct ImagePreview {
     }
   }
 
-  /**
-   * 保存比例切换胶囊
-   *  - 铺满屏幕：按设备屏幕像素离屏合成，所见即所存（默认）
-   *  - 原图比例：保留完整原图、不裁切不缩放
-   */
-  @Builder
-  saveModePill(label: string, mode: number) {
-    Text(label)
-      .fontSize(12)
-      .fontColor(this.saveMode === mode ? '#111114' : '#E6E6EB')
-      .backgroundColor(this.saveMode === mode ? '#E6C07E' : '#44000000')
-      .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-      .borderRadius(14)
-      .onClick(() => { this.saveMode = mode; })
-  }
-
   private onDoubleTap(): void {
     animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
       if (this.zoomScale > 1) {
@@ -317,17 +300,14 @@ export struct ImagePreview {
       }
       tempCreated = true;
 
-      // 保存比例：
-      //  - 0 铺满屏幕：按设备屏幕像素离屏合成（cover + 当前缩放/平移 = 用户所见），
-      //    存出来的图就是手机比例，设为壁纸不会被系统二次裁切；
-      //  - 1 原图比例：直接落原始文件字节（完整原图、不裁切、不缩放）。
-      // 此前只有一条路径——把原图原样拷进相册，于是"预览是手机比例、存下来还是原比例"。
-      if (this.saveMode === 0) {
-        const bytes: ArrayBuffer = await this.composeCanvasRatio(dest);
-        const out = fileIo.openSync(dest, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
-        fileIo.writeSync(out.fd, bytes);
-        fileIo.closeSync(out);
-      }
+      // 保存比例固定"铺满屏幕"：按设备屏幕像素离屏合成（cover + 当前缩放/平移 = 用户所见），
+      // 存出来的图就是手机比例，设为壁纸/桌面不会被系统二次裁切。
+      // （"原图比例"出口已按产品要求收起；以后要保留的话，放在编辑页的导出更合适 ——
+      //   预览页的点按都要走 SaveButton 的临时授权，多一步选择容易超出授权时限。）
+      const bytes: ArrayBuffer = await this.composeCanvasRatio(dest);
+      const out = fileIo.openSync(dest, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+      fileIo.writeSync(out.fd, bytes);
+      fileIo.closeSync(out);
 
       const phHelper: photoAccessHelper.PhotoAccessHelper = photoAccessHelper.getPhotoAccessHelper(ctx);
       const uri: string = await phHelper.createAsset(photoAccessHelper.PhotoType.IMAGE, 'jpg');
@@ -603,21 +583,16 @@ export struct ImagePreview {
       // ===== 6. 底部操作区（设为壁纸主 CTA + 胶囊工具栏，仅 UI 可见时显示） =====
       if (this.uiVisible) {
         Column({ space: 12 }) {
-          // ① 保存比例：默认"铺满屏幕"（手机壁纸效果），需要完整原图时切到"原图比例"
-          Row({ space: 8 }) {
-            this.saveModePill('铺满屏幕', 0)
-            this.saveModePill('原图比例', 1)
-          }
-
-          // ② 主 CTA：设为锁屏 / 设为桌面
+          // ① 主 CTA：设为锁屏 / 设为桌面
           // 壁纸 App 的核心转化动作就是“把它变成我的壁纸”，
           // 保存完就此结束会让用户以为“保存了=设置了”，所以这里必须有明确出口。
+          // 保存比例固定"铺满屏幕"，所以不再放"铺满/原图比例"胶囊（问题一）。
           Row({ space: 12 }) {
             this.setWallpaperButton('设为锁屏', WallpaperKind.LOCK)
             this.setWallpaperButton('设为桌面', WallpaperKind.HOME)
           }
 
-          // ③ 胶囊工具栏
+          // ② 胶囊工具栏
           Row({ space: 28 }) {
             // 收藏
             Text(this.isFav ? '❤️' : '🤍')
