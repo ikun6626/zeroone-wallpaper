@@ -27,7 +27,7 @@ const DISMISS_THRESHOLD: number = 120;
  *
  * 特性：
  *  - 纯黑背景 + 图片**铺满屏幕**（cover，与 Cuto 一致）：所见即壁纸实际效果
- *  - 左上圆形返回箭头；底部 Cuto 式操作区：磨砂胶囊（收藏/预览模式/编辑）+ 一个主 CTA
+ *  - 左上圆形返回箭头；底部 Cuto 式磨砂胶囊：收藏 / 预览模式 / 保存并设为壁纸 / 编辑
  *  - 保存成功后弹出图库设置引导（三方应用无法直接换壁纸，见 SetWallpaperGuide）
  *  - 单击图片：工具栏/返回箭头在显示 ↔ 隐藏之间切换（沉浸式看图）
  *  - 双指捏合缩放；双击放大/还原；放大后单指拖动浏览
@@ -207,27 +207,28 @@ export struct ImagePreview {
   }
 
   /**
-   * 主 CTA：设为壁纸（保存铺满图 → 步骤卡片里再选锁屏/桌面）
-   * 说明：写系统相册必须有 SaveButton 的临时授权，普通 Text/Button 点击
-   * 没有授权，createAsset 会直接抛权限错误，因此这里必须是安全控件。
-   * 也因此不能自己画一个"设为壁纸"胶囊：SaveButton 的外观由系统决定，
-   * 只能用它的胶囊图标 + 下方一行自己的说明文字（Cuto 的保存按钮同理）。
+   * 工具栏上的"保存 / 设为壁纸"按钮（与收藏、预览模式、编辑同排）
+   *
+   * 说明：写系统相册必须有 SaveButton 的临时授权，普通 Text/Button 点击没有授权，
+   * createAsset 会直接抛权限错误，所以这里必须是安全控件（不能自己画一个图标）；
+   * 但外观是能改的 —— `SecurityComponentMethod`（SaveButtonAttribute 的基类）提供了
+   * `backgroundColor / iconColor / iconSize / fontColor`，所以可以把它做成
+   * "无底色 + 白色图标"，和旁边三个 emoji 图标视觉统一。
    */
   @Builder
-  setWallpaperButton(label: string, kind: number) {
-    Column({ space: 4 }) {
-      SaveButton({ icon: SaveIconStyle.FULL_FILLED, buttonType: ButtonType.Capsule })
-        .width(104)
-        .height(36)
-        .onClick((_: ClickEvent, result: SaveButtonOnClickResult) => {
-          if (result === SaveButtonOnClickResult.SUCCESS && !this.saving) {
-            this.saveToAlbum(kind);
-          }
-        })
-      Text(label)
-        .fontSize(11)
-        .fontColor('#E6E6EB')
-    }
+  saveWallpaperButton() {
+    SaveButton({ icon: SaveIconStyle.FULL_FILLED, buttonType: ButtonType.Circle })
+      .width(40)
+      .height(40)
+      .backgroundColor(Color.Transparent)
+      .iconColor('#F2F2F5')
+      .iconSize(22)
+      .onClick((_: ClickEvent, result: SaveButtonOnClickResult) => {
+        if (result === SaveButtonOnClickResult.SUCCESS && !this.saving) {
+          // 固定存"铺满屏幕"（= 壁纸成品）；锁屏/桌面在保存后的步骤卡片里选
+          this.saveToAlbum(WallpaperKind.LOCK);
+        }
+      })
   }
 
   private onDoubleTap(): void {
@@ -556,8 +557,9 @@ export struct ImagePreview {
       // ===== 6. 底部操作区（Cuto 式：一个磨砂胶囊放图标 + 一个主 CTA，仅 UI 可见时显示） =====
       if (this.uiVisible) {
         Column({ space: 12 }) {
-          // ① 磨砂胶囊工具栏：收藏 / 预览模式（普通→桌面→锁屏）/ 编辑
-          //    存图的入口收敛到下面的主 CTA（它本身就是 SaveButton），不再摆第二个"保存"圆圈
+          // 磨砂胶囊工具栏：收藏 / 预览模式（普通→桌面→锁屏）/ 保存并设为壁纸 / 编辑
+          //  四件事全在一排，图标统一为白色；保存按钮是系统 SaveButton（授权必需），
+          //  但用 backgroundColor/iconColor/iconSize 抹掉了系统自带的底色，看起来和旁边一致。
           Row({ space: 28 }) {
             // 收藏
             Text(this.isFav ? '❤️' : '🤍')
@@ -579,6 +581,9 @@ export struct ImagePreview {
               else this.previewMode = 'normal';
             })
 
+            // 保存铺满图并给出设置步骤（锁屏/桌面在卡片里选）
+            this.saveWallpaperButton()
+
             // 编辑
             Text('✏️').fontSize(22)
               .onClick(() => { this.showEditor = true; })
@@ -586,11 +591,6 @@ export struct ImagePreview {
           .padding({ left: 20, right: 20, top: 10, bottom: 10 })
           .backgroundColor('#44000000')
           .borderRadius(28)
-
-          // ② 主 CTA：保存铺满图并给出设置步骤
-          //    为什么只有一个按钮：写系统相册必须走 SaveButton 的临时授权，
-          //    两个系统"保存"按钮叠在一起又丑又费解 —— 锁屏/桌面在步骤卡片里选（Cuto 同款）。
-          this.setWallpaperButton('设为壁纸', WallpaperKind.LOCK)
         }
         .position({ x: '50%', y: '100%' })
         .markAnchor({ x: '50%', y: '100%' })
