@@ -4,6 +4,7 @@ import cropGeometryTest from './CropGeometry.test';
 import canvasPresetsTest from './CanvasPresets.test';
 import layerStoreTest from './LayerStore.test';
 import canvasStateTest from './CanvasState.test';
+import filterPipelineTest from './FilterPipeline.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -12,4 +13,5 @@ export default function testsuite() {
   canvasPresetsTest();
   layerStoreTest();
   canvasStateTest();
+  filterPipelineTest();
 }
