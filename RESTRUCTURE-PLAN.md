@@ -55,6 +55,50 @@
 > 第 3 步进一步拆成 3a~3d 的原因：把 200 多行渲染代码一次性搬进新组件，一旦编译或视觉出问题，
 > 很难判断是"搬家搬错了"还是"顺手改错了"。拆成四小步之后，每一步都能单独编译 + 单独回滚，
 > 3a/3b 是纯机械的"剪切粘贴成 @Builder"，3c 才跨文件，3d 才真正换数据源。
+
+## 三之二、3c/3d 接口契约（搬迁前先定死，避免边搬边改设计）
+
+```ts
+// common/components/CanvasView.ets
+@Component
+export struct CanvasView {
+  /** 画布状态：预览尺寸、底图尺寸、显示矩形、整套裁剪状态（见 common/editor/CanvasState.ets） */
+  @ObjectLink state: CanvasState;
+  /** 图层数据：文字/贴纸 + 选中态 + 实时拖动标量（见 common/editor/LayerStore.ets） */
+  @ObjectLink layers: LayerStore;
+  /** 当前位图（Image 组件的数据源；只读，替换由父组件负责） */
+  @Prop pixelMap: image.PixelMap | undefined;
+  /** 当前工具（'crop' 等），裁剪态分支要用 */
+  @Prop tool: string;
+  /** 缩放滑杆的垂直偏移换算（纯函数，见 ImageEditor.sliderOffsetFor） */
+  offsetForSlider: (baseSize: number, scale: number) => number;
+
+  // 回调（父组件仍是状态的唯一所有者）
+  onSelectText: (idx: number) => void;
+  onSelectSticker: (idx: number) => void;
+  onRemoveText: (idx: number) => void;
+  onRemoveSticker: (idx: number) => void;
+  /** 图层数据变动后通知父组件（父组件据此触发刷新/标脏） */
+  onLayersChanged: () => void;
+  /** 裁剪手势（选区/图片变换）统一回报给父组件，几何仍在 CropGeometry 里 */
+  onCropDragStart: () => void;
+  onCropDragUpdate: (dx: number, dy: number) => void;
+  onCropPinchStart: () => void;
+  onCropPinchUpdate: (scale: number) => void;
+  onCropHandleStart: () => void;
+  onCropHandleDrag: (type: number, dx: number, dy: number) => void;
+}
+```
+
+**所有权规则（关键，违反就会出"拖动不跟手"或"选中框跳位"）：**
+
+1. `CanvasState` 与 `LayerStore` 由 `ImageEditor` 持有，`CanvasView` 只读写它们，**不复制到本地 @State**。
+2. 拖动中的实时位移只写 `LayerStore.updateDrag()`（标量），手势结束才 `commitDrag()`；`CanvasView` 不直接改数组。
+3. 位图是只读输入；替换位图（旋转/裁剪/滤镜）仍然发生在父组件，通过 `pixelMap` 单向流入。
+4. 裁剪几何一律调 `CropGeometry` 的纯函数，`CanvasView` 里不出现第二套坐标换算。
+5. `@ObjectLink` 要求类上挂 `@Observed`：为此在 `CanvasState` 与 `LayerStore` 外用薄壳类装饰，**不改这两个类的内部规则**（它们的单测继续有效）。
+
+**验收**：搬迁后 `hvigor … test` 39 个用例保持全绿；真机回归清单（预览铺满、双保存比例、裁剪所见即所裁、文字拖动跟手、导入贴纸可拖动缩放）逐条复验。
 - **回退开关**：第 5 步切换入口时保留旧的 `ImageEditor` 直达路径，出问题可以立刻切回来。
 - **不新建三套坐标**：画布、图层、裁剪继续共用 `common/canvas` 与 `CropGeometry` 的公式，新组件只消费，不重新推导。
 - **每步都跑** `hvigor … test`（几何用例）与 `assembleHap`；新增源文件后必须 `clean` 一次再打包，否则增量编译可能漏编。
