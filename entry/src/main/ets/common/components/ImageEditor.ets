@@ -38,6 +38,8 @@ import { composeToJpeg, composeCropToPixelMap, CropComposeResult } from '../edit
 import { PixelScope } from '../utils/PixelScope';
 import { CanvasSpec } from '../canvas/CanvasSpec';
 import { EditGuard } from '../utils/EditGuard';
+import { EditorCanvasModel, ObservableCanvasState } from '../editor/EditorCanvasModel';
+import { CanvasView } from './CanvasView';
 
 /**
  * ImageEditor —— DIY 图片编辑器（全屏，三页共用）
@@ -61,6 +63,27 @@ export struct ImageEditor {
   onClose: () => void = () => {
   };
 
+  /**
+   * 画布 + 图层状态（阶段 5 第 3d 步：唯一所有者）
+   *
+   * 此前这些状态（文字/贴纸数组、选中态、拖动实时标量、裁剪框、预览尺寸、底图尺寸）
+   * 是二十来个 @State 直接摊在本组件里的；现在收敛成 `model.canvas` / `model.layers`，
+   * 由 `CanvasView` 通过 @ObjectLink 读写，本组件只负责编排与导出。
+   * 五条所有权规则见 RESTRUCTURE-PLAN.md「三之二」：不复制到本地 @State、
+   * 拖动只写实时标量、位图单向流入、裁剪几何只走 CropGeometry。
+   */
+  @State model: EditorCanvasModel = new EditorCanvasModel();
+  /**
+   * 与 `model.canvas` 是**同一个实例**（aboutToAppear 里对齐，不是副本）。
+   *
+   * 为什么要多挂一次 @State：ArkUI V1 的观察是"按对象注册"的 —— 组件只会成为它自己
+   * @State/@ObjectLink 的那个对象的订阅者（框架里由 ObservedObject.addOwningProperty 登记），
+   * **嵌套对象的属性写入不会通知外层容器**。所以：
+   *  - 本组件的渲染凡是要跟着 canvas 变（裁剪比例胶囊的高亮）就读 `this.canvas.*`；
+   *  - 画布侧同理，CanvasView 用 @ObjectLink 直接订阅 canvas/layers。
+   * 事件处理（写入）走哪个引用都一样，因为它们指向同一份数据。
+   */
+  @State canvas: ObservableCanvasState = new ObservableCanvasState();
   /** 当前编辑位图 */
   @State curPixelMap: image.PixelMap | undefined = undefined;
   /**
@@ -71,12 +94,11 @@ export struct ImageEditor {
   /**
    * 是否有未保存的修改：旋转/翻转/裁剪/滤镜/纹理/文字/贴纸任一操作后置 true。
    * 关闭编辑器时据此弹出确认，避免返回手势一滑就丢掉全部创作。
+   * 图层侧的增删改还会写进 `model.layers` 的 dirty 标记（见 layerDirty），两处取"或"。
    */
   private dirty: boolean = false;
   /** 返回键处理在 EditGuard 中的注册 id（-1 = 未注册） */
   private backId: number = -1;
-  @State curW: number = 0;
-  @State curH: number = 0;
   @State loading: boolean = true;
   @State saving: boolean = false;
   /** 滤镜/纹理后台处理中（TaskPool） */
@@ -89,57 +111,24 @@ export struct ImageEditor {
   /** 当前纹理与强度 */
   @State textureName: string = '';
   @State textureStrength: number = 70;
-  /** 文字列表 */
-  @State texts: TextItem[] = [];
-  @State selectedText: number = -1;
-  /**
-   * 文字拖动中的实时位移（不写回数组，避免每帧重建整个图层列表）
-   * 拖动中只改这三个标量，松手时才把最终值提交进 texts 并刷新一次。
-   */
-  @State textDragIdx: number = -1;
-  @State textDragDx: number = 0;
-  @State textDragDy: number = 0;
   @State showTextInput: boolean = false;
   @State textInput: string = '';
   @State textColor: string = '#FFFFFF';
   @State textStyle: number = 0;
-  /** 贴纸列表 */
-  @State stickers: StickerItem[] = [];
-  @State selectedSticker: number = -1;
   /** 我的抠图贴纸（文件路径） */
   @State userStickers: string[] = [];
 
-  /** 裁剪框（容器坐标） */
-  @State cropRatio: string = '自由';
-  @State cropVisible: boolean = false;
-  @State cropX: number = 0;
-  @State cropY: number = 0;
-  @State cropW: number = 0;
-  @State cropH: number = 0;
-  @State previewW: number = 360;
-  @State previewH: number = 640;
-  /** 裁剪态图片平移（拖动图片调整裁剪位置） */
-  @State cropOffsetX: number = 0;
-  @State cropOffsetY: number = 0;
-  /** 裁剪态图片缩放 */
-  @State cropScale: number = 1;
-  /** 裁剪态任意角度旋转（度） */
-  @State cropAngle: number = 0;
-
-  /** 手势基准 */
-  private textBaseX: number = 0;
-  private textBaseY: number = 0;
-  private textBaseScale: number = 1;
-  /** 贴纸旋转手势基准角（度） */
-  private stickerBaseAngle: number = 0;
-  private handleBase: HandleBase = { x: 0, y: 0, w: 0, h: 0 };
   /** 裁剪态图片拖拽基准 */
   private cropPanBaseX: number = 0;
   private cropPanBaseY: number = 0;
   /** 裁剪态双指缩放基准 */
   private cropPinchBase: number = 1;
+  /** 裁剪框八把手拖拽起点（拖拽开始时从选区快照，几何仍走 CropGeometry.calcCropRect） */
+  private handleBase: HandleBase = { x: 0, y: 0, w: 0, h: 0 };
 
   aboutToAppear(): void {
+    // 让 canvas 指向 model 里的那个实例（同一份数据，不产生副本）
+    this.canvas = this.model.canvas;
     this.cleanupStaleFiles();
     // 注册返回键处理：编辑器作为覆盖层，返回键应先问"是否放弃编辑"而不是直接关页面
     this.backId = EditGuard.push((): boolean => {
@@ -168,7 +157,8 @@ export struct ImageEditor {
    * ✕ 按钮与系统返回键共用此入口，保证两条路径行为一致。
    */
   private async requestClose(): Promise<void> {
-    if (!this.dirty) {
+    // 两处 dirty 取"或"：位图类操作写 this.dirty，图层类操作写 LayerStore 的 dirty 标记
+    if (!this.dirty && !this.model.layers.isDirty()) {
       this.onClose();
       return;
     }
@@ -247,9 +237,8 @@ export struct ImageEditor {
         console.error(`release ImageSource failed: ${JSON.stringify(e)}`);
       }
       const info = pm.getImageInfoSync();
-      this.curW = info.size.width;
-      this.curH = info.size.height;
-      this.invalidateDisp();
+      this.model.canvas.imageW = info.size.width;
+      this.model.canvas.imageH = info.size.height;
       this.curPixelMap = this.scope.setCurrent(pm);
     } catch (e) {
       console.error(`loadOriginal failed: ${JSON.stringify(e)}`);
@@ -283,7 +272,7 @@ export struct ImageEditor {
   /** 用处理后的字节生成新 PixelMap */
   private async commitBytes(bytes: ArrayBuffer): Promise<void> {
     const opts: image.InitializationOptions = {
-      size: { width: this.curW, height: this.curH },
+      size: { width: this.model.canvas.imageW, height: this.model.canvas.imageH },
       pixelFormat: image.PixelMapFormat.RGBA_8888,
       editable: true
     };
@@ -297,14 +286,13 @@ export struct ImageEditor {
     if (pm === undefined) {
       return;
     }
-    const oldW: number = this.curW;
-    const oldH: number = this.curH;
+    const oldW: number = this.model.canvas.imageW;
+    const oldH: number = this.model.canvas.imageH;
     const dispOld: DispRect = this.dispRect();
     await pm.rotate(angle);
-    const tmp: number = this.curW;
-    this.curW = this.curH;
-    this.curH = tmp;
-    this.invalidateDisp();
+    const tmp: number = this.model.canvas.imageW;
+    this.model.canvas.imageW = this.model.canvas.imageH;
+    this.model.canvas.imageH = tmp;
     // 文字/贴纸锚点随画面旋转（旋转后尺寸互换）
     this.remapOverlays((p: LayerPoint): LayerPoint => mapRotate(p, angle, oldW, oldH),
       dispOld, oldH, oldW);
@@ -316,8 +304,8 @@ export struct ImageEditor {
     if (pm === undefined) {
       return;
     }
-    const oldW: number = this.curW;
-    const oldH: number = this.curH;
+    const oldW: number = this.model.canvas.imageW;
+    const oldH: number = this.model.canvas.imageH;
     const dispOld: DispRect = this.dispRect();
     await pm.flip(horizontal, vertical);
     // 翻转不改尺寸，图层只做镜像
@@ -330,92 +318,127 @@ export struct ImageEditor {
    * 几何变换后重映射全部叠加图层（文字/贴纸）：
    * 变换前把 translate(vp) 换算成旧图像素锚点，经 map 映射到新图像素，再反算新 translate；
    * 图层缩放跟随画面放大量（新 scale / 旧 scale）。
-   * 必须在 curW/curH 已更新为变换后尺寸时调用。
+   * 必须在 model.canvas.imageW/imageH 已更新为变换后尺寸时调用。
    */
   private remapOverlays(map: (p: LayerPoint) => LayerPoint, dispOld: DispRect,
     newW: number, newH: number): void {
+    const cw: number = this.model.canvas.previewW;
+    const ch: number = this.model.canvas.previewH;
     const dispNew: DispRect = this.dispRect();
     const ratio: number = dispOld.scale > 0 ? dispNew.scale / dispOld.scale : 1;
-    for (let i = 0; i < this.texts.length; i++) {
-      const t: TextItem = this.texts[i];
-      const a: LayerPoint = toAnchor(t.x, t.y, dispOld, this.previewW, this.previewH);
+    const texts: TextItem[] = this.model.layers.texts();
+    for (let i = 0; i < texts.length; i++) {
+      const t: TextItem = texts[i];
+      const a: LayerPoint = toAnchor(t.x, t.y, dispOld, cw, ch);
       const m: LayerPoint = clampAnchor(map(a), newW, newH);
-      const p: LayerPoint = fromAnchor(m.x, m.y, dispNew, this.previewW, this.previewH);
+      const p: LayerPoint = fromAnchor(m.x, m.y, dispNew, cw, ch);
       t.x = p.x;
       t.y = p.y;
       t.scale = t.scale * ratio;
     }
-    for (let i = 0; i < this.stickers.length; i++) {
-      const s: StickerItem = this.stickers[i];
-      const a: LayerPoint = toAnchor(s.x, s.y, dispOld, this.previewW, this.previewH);
+    const stickers: StickerItem[] = this.model.layers.stickers();
+    for (let i = 0; i < stickers.length; i++) {
+      const s: StickerItem = stickers[i];
+      const a: LayerPoint = toAnchor(s.x, s.y, dispOld, cw, ch);
       const m: LayerPoint = clampAnchor(map(a), newW, newH);
-      const p: LayerPoint = fromAnchor(m.x, m.y, dispNew, this.previewW, this.previewH);
+      const p: LayerPoint = fromAnchor(m.x, m.y, dispNew, cw, ch);
       s.x = p.x;
       s.y = p.y;
       s.scale = s.scale * ratio;
     }
-    this.refreshTexts();
-    this.refreshStickers();
+    // 批量几何重映射是就地改点的（不是拖动手势），改完标脏并推一次刷新
+    this.model.layers.markDirty();
   }
 
   reset(): void {
-    this.texts = [];
-    this.selectedText = -1;
+    // 回到原图：清掉文字、复位滤镜/纹理/裁剪，并重新加载底图
+    this.model.layers.clearTexts();
+    // 重置后画面就是原图，图层侧的 dirty 跟着清掉（父组件的 dirty 保持原样，
+    // 与旧行为一致：此前编辑过再点重置，关闭时仍会确认）
+    this.model.layers.markClean();
     this.filterName = '原图';
     this.textureName = '';
-    this.cropVisible = false;
+    this.model.canvas.cropVisible = false;
     this.loadOriginal();
   }
 
   /** 裁剪专用重置：只重置裁剪参数，不影响滤镜/文字/贴纸 */
   resetCrop(): void {
-    this.cropRatio = '自由';
-    this.cropVisible = false;
-    this.cropOffsetX = 0;
-    this.cropOffsetY = 0;
-    this.cropScale = 1;
-    this.cropAngle = 0;
-  }
-
-  /** 裁剪态：拖动图片（苹果照片式：手指在选区内拖动图片，而非选区） */
-  onCropImageDrag(e: GestureEvent): void {
-    this.cropOffsetX = this.cropPanBaseX + e.offsetX;
-    this.cropOffsetY = this.cropPanBaseY + e.offsetY;
-  }
-
-  /** 裁剪态：双指缩放图片 */
-  onCropImagePinch(e: GestureEvent): void {
-    this.cropScale = Math.max(0.5, Math.min(5, this.cropPinchBase * e.scale));
+    this.model.canvas.clearCrop();
   }
 
   // ==================== 裁剪 ====================
+  // 裁剪手势由 CanvasView 回报位移（dx/dy/scale），几何一律留在这里：
+  // 选区计算走 CropGeometry.calcCropRect，图片变换直接写 CanvasState —— 不出现第二套坐标换算。
 
-  /** dispRect 缓存（避免单次渲染中重复计算 8+ 次） */
-  private dispCache: DispRect = { x: 0, y: 0, w: 0, h: 0, scale: 1 };
-  private dispDirty: boolean = true;
-
-  private dispRect(): DispRect {
-    if (!this.dispDirty) {
-      return this.dispCache;
-    }
-    const cw: number = this.previewW;
-    const ch: number = this.previewH;
-    if (this.curW <= 0 || this.curH <= 0 || cw <= 0 || ch <= 0) {
-      this.dispCache = { x: 0, y: 0, w: cw, h: ch, scale: 1 };
-      this.dispDirty = false;
-      return this.dispCache;
-    }
-    const scale: number = Math.min(cw / this.curW, ch / this.curH);
-    const w: number = this.curW * scale;
-    const h: number = this.curH * scale;
-    this.dispCache = { x: (cw - w) / 2, y: (ch - h) / 2, w: w, h: h, scale: scale };
-    this.dispDirty = false;
-    return this.dispCache;
+  /** 裁剪态：拖动图片开始（记录基准） */
+  private onCropDragStart(): void {
+    this.cropPanBaseX = this.model.canvas.cropOffsetX;
+    this.cropPanBaseY = this.model.canvas.cropOffsetY;
   }
 
-  /** 标记 dispRect 缓存失效（在 curW/curH/previewW/previewH 变化时调用） */
-  private invalidateDisp(): void {
-    this.dispDirty = true;
+  /** 裁剪态：拖动图片（苹果照片式：手指在选区内拖动图片，而非选区） */
+  private onCropDragUpdate(dx: number, dy: number): void {
+    this.model.canvas.cropOffsetX = this.cropPanBaseX + dx;
+    this.model.canvas.cropOffsetY = this.cropPanBaseY + dy;
+  }
+
+  /** 裁剪态：双指缩放开始（记录基准） */
+  private onCropPinchStart(): void {
+    this.cropPinchBase = this.model.canvas.cropScale;
+  }
+
+  /** 裁剪态：双指缩放图片（0.5~5 倍，与旧行为一致） */
+  private onCropPinchUpdate(scale: number): void {
+    this.model.canvas.cropScale = Math.max(0.5, Math.min(5, this.cropPinchBase * scale));
+  }
+
+  /** 把手拖拽开始：把当前选区快照成基准（8 个把手共用） */
+  private onCropHandleStart(): void {
+    this.handleBase = {
+      x: this.model.canvas.cropX,
+      y: this.model.canvas.cropY,
+      w: this.model.canvas.cropW,
+      h: this.model.canvas.cropH
+    };
+  }
+
+  /**
+   * dispRect 缓存：入参（预览区尺寸 + 底图像素尺寸）没变就直接复用，
+   * 避免单次交互里重复计算 8+ 次；入参一旦变化自动重算，无需外部记得调用失效。
+   */
+  private dispCache: DispRect = { x: 0, y: 0, w: 0, h: 0, scale: 1 };
+  private dispKeyW: number = -1;
+  private dispKeyH: number = -1;
+  private dispKeyImageW: number = -1;
+  private dispKeyImageH: number = -1;
+
+  private dispRect(): DispRect {
+    const cw: number = this.model.canvas.previewW;
+    const ch: number = this.model.canvas.previewH;
+    const iw: number = this.model.canvas.imageW;
+    const ih: number = this.model.canvas.imageH;
+    if (this.dispKeyW === cw && this.dispKeyH === ch
+      && this.dispKeyImageW === iw && this.dispKeyImageH === ih) {
+      return this.dispCache;
+    }
+    let next: DispRect;
+    if (iw <= 0 || ih <= 0 || cw <= 0 || ch <= 0) {
+      next = { x: 0, y: 0, w: cw, h: ch, scale: 1 };
+    } else {
+      const scale: number = Math.min(cw / iw, ch / ih);
+      const w: number = iw * scale;
+      const h: number = ih * scale;
+      next = { x: (cw - w) / 2, y: (ch - h) / 2, w: w, h: h, scale: scale };
+    }
+    this.dispCache = next;
+    this.dispKeyW = cw;
+    this.dispKeyH = ch;
+    this.dispKeyImageW = iw;
+    this.dispKeyImageH = ih;
+    // 显示矩形是画布状态的一部分（裁剪换算要读它）：写回 model.canvas，不另存副本
+    this.model.canvas.disp = next;
+    return next;
   }
 
   /**
@@ -424,8 +447,8 @@ export struct ImageEditor {
    * 支持比例：自由、1:1、4:3、3:4、16:9、9:16
    */
   selectCropRatio(ratio: string): void {
-    this.cropRatio = ratio;
-    const disp = this.dispRect();
+    this.model.canvas.cropRatio = ratio;
+    const disp: DispRect = this.dispRect();
     let w: number = disp.w;
     let h: number = disp.h;
     if (ratio !== '自由') {
@@ -438,46 +461,35 @@ export struct ImageEditor {
         w = h * target;
       }
     }
-    this.cropW = w;
-    this.cropH = h;
-    this.cropX = disp.x + (disp.w - w) / 2;
-    this.cropY = disp.y + (disp.h - h) / 2;
+    this.model.canvas.cropW = w;
+    this.model.canvas.cropH = h;
+    this.model.canvas.cropX = disp.x + (disp.w - w) / 2;
+    this.model.canvas.cropY = disp.y + (disp.h - h) / 2;
     // 切比例时重置图片变换，避免上次状态残留导致选区错位
-    this.cropOffsetX = 0;
-    this.cropOffsetY = 0;
-    this.cropScale = 1;
-    this.cropAngle = 0;
-    this.cropVisible = true;
+    this.model.canvas.resetCropTransform();
+    this.model.canvas.cropVisible = true;
   }
 
   async applyCrop(): Promise<void> {
     const pm: image.PixelMap | undefined = this.curPixelMap;
-    if (pm === undefined || !this.cropVisible) {
+    if (pm === undefined || !this.model.canvas.cropVisible) {
       return;
     }
     const dispOld: DispRect = this.dispRect();
-    const oldW: number = this.curW;
-    const oldH: number = this.curH;
-    const rect: CropRect = { x: this.cropX, y: this.cropY, w: this.cropW, h: this.cropH };
-    const view: CropView = {
-      disp: dispOld,
-      previewW: this.previewW,
-      previewH: this.previewH,
-      scale: this.cropScale,
-      offsetX: this.cropOffsetX,
-      offsetY: this.cropOffsetY,
-      angle: this.cropAngle
-    };
+    const oldW: number = this.model.canvas.imageW;
+    const oldH: number = this.model.canvas.imageH;
+    // 选区与图片变换都取自 CanvasState（与 UI 使用的是同一份数据）
+    const rect: CropRect = this.model.canvas.cropRect();
+    const view: CropView = this.model.canvas.cropView();
     const t: CropDrawTransform = cropDrawTransform(rect, view);
     this.processing = true;
     try {
       // 与 UI 同一套变换在离屏画布上重绘 → 缩放/平移/旋转都被正确带进结果
       const res: CropComposeResult = await composeCropToPixelMap(pm, oldW, oldH, rect, view,
         CanvasSpec.MAX_LONG_EDGE);
-      this.curW = res.width;
-      this.curH = res.height;
+      this.model.canvas.imageW = res.width;
+      this.model.canvas.imageH = res.height;
       this.curPixelMap = this.scope.setCurrent(res.pixelMap);
-      this.invalidateDisp();
       // 图层锚点重映射：旧图像素 → 屏幕(vp) → 输出画布像素 → 新图像素
       // （乘 canvasScale 抵消长边护栏带来的额外缩放）
       const dispNew: DispRect = this.dispRect();
@@ -486,34 +498,30 @@ export struct ImageEditor {
         const sx: number = dispOld.x + p.x * dispOld.scale;
         const sy: number = dispOld.y + p.y * dispOld.scale;
         return unprojectCrop((sx - dispNew.x) * toOutput, (sy - dispNew.y) * toOutput, t);
-      }, dispOld, this.curW, this.curH);
-      this.cropVisible = false;
-      this.cropRatio = '自由';
-      this.cropOffsetX = 0;
-      this.cropOffsetY = 0;
-      this.cropScale = 1;
-      this.cropAngle = 0;
+      }, dispOld, this.model.canvas.imageW, this.model.canvas.imageH);
+      // 提交后退出裁剪态并复位（选区、比例、图片变换）
+      this.model.canvas.clearCrop();
       await this.refreshPixelMap();
       promptAction.showToast({ message: '已裁剪 ✅' });
     } catch (e) {
       console.error(`applyCrop failed: ${JSON.stringify(e)}`);
       promptAction.showToast({ message: '裁剪失败，请重试' });
-      this.cropVisible = false;
+      this.model.canvas.cropVisible = false;
     } finally {
       this.processing = false;
     }
   }
   /**
-   * 四角手柄拖拽：几何计算在 CropGeometry.calcCropRect 纯函数中，
-   * type 0=左上 1=右上 2=左下 3=右下（对边固定，固定比例联动宽高）
+   * 四角/四边把手拖拽：几何计算在 CropGeometry.calcCropRect 纯函数中，
+   * type 0=左上 1=右上 2=左下 3=右下 4=上边 5=右边 6=下边 7=左边（对边固定，固定比例联动宽高）
    */
-  private onCropHandleDrag(type: number, e: GestureEvent): void {
-    const rect = calcCropRect(this.handleBase, type, e.offsetX, e.offsetY,
-      this.dispRect(), cropRatioValue(this.cropRatio));
-    this.cropX = rect.x;
-    this.cropY = rect.y;
-    this.cropW = rect.w;
-    this.cropH = rect.h;
+  private onCropHandleDrag(type: number, dx: number, dy: number): void {
+    const rect: CropRect = calcCropRect(this.handleBase, type, dx, dy,
+      this.dispRect(), cropRatioValue(this.model.canvas.cropRatio));
+    this.model.canvas.cropX = rect.x;
+    this.model.canvas.cropY = rect.y;
+    this.model.canvas.cropW = rect.w;
+    this.model.canvas.cropH = rect.h;
   }
 
   // ==================== 滤镜 ====================
@@ -528,16 +536,17 @@ export struct ImageEditor {
       this.filterName = '原图';
       this.textureName = '';
       // 若之前裁剪过，重载会改变底图尺寸，图层锚点按比例回射到新底图
-      const oldW: number = this.curW;
-      const oldH: number = this.curH;
+      const oldW: number = this.model.canvas.imageW;
+      const oldH: number = this.model.canvas.imageH;
       const dispOld: DispRect = this.dispRect();
       await this.loadOriginal();
-      if (oldW > 0 && oldH > 0 && (oldW !== this.curW || oldH !== this.curH)) {
-        const sx: number = this.curW / oldW;
-        const sy: number = this.curH / oldH;
+      if (oldW > 0 && oldH > 0
+        && (oldW !== this.model.canvas.imageW || oldH !== this.model.canvas.imageH)) {
+        const sx: number = this.model.canvas.imageW / oldW;
+        const sy: number = this.model.canvas.imageH / oldH;
         this.remapOverlays((p: LayerPoint): LayerPoint => {
           return { x: p.x * sx, y: p.y * sy };
-        }, dispOld, this.curW, this.curH);
+        }, dispOld, this.model.canvas.imageW, this.model.canvas.imageH);
       }
       return;
     }
@@ -552,7 +561,8 @@ export struct ImageEditor {
       this.processing = true;
       const bytes: ArrayBuffer = new ArrayBuffer(pm.getPixelBytesNumber());
       await pm.readPixelsToBuffer(bytes);
-      const result: object = await taskpool.execute(runFilterTask, bytes, this.curW, this.curH, name);
+      const result: object = await taskpool.execute(runFilterTask, bytes,
+        this.model.canvas.imageW, this.model.canvas.imageH, name);
       await this.commitBytes(result as ArrayBuffer);
       this.filterName = name;
     } catch (e) {
@@ -584,8 +594,8 @@ export struct ImageEditor {
       this.processing = true;
       const bytes: ArrayBuffer = new ArrayBuffer(pm.getPixelBytesNumber());
       await pm.readPixelsToBuffer(bytes);
-      const result: object = await taskpool.execute(runTextureTask, bytes, this.curW, this.curH,
-        name, this.textureStrength);
+      const result: object = await taskpool.execute(runTextureTask, bytes,
+        this.model.canvas.imageW, this.model.canvas.imageH, name, this.textureStrength);
       await this.commitBytes(result as ArrayBuffer);
       this.textureName = name;
     } catch (e) {
@@ -598,15 +608,6 @@ export struct ImageEditor {
 
   // ==================== 文字与艺术字 ====================
 
-  private refreshTexts(): void {
-    const list: TextItem[] = [];
-    for (const t of this.texts) {
-      list.push(t);
-    }
-    this.texts = list;
-    this.dirty = true;
-  }
-
   /** 添加文字（支持多行 \n） */
   addText(content?: string): void {
     const text: string = (content !== undefined ? content : this.textInput).trim();
@@ -615,7 +616,7 @@ export struct ImageEditor {
       return;
     }
     // 级联偏移：避免连续添加的文字全部重叠在画面正中心
-    const cascade: number = this.texts.length % 4;
+    const cascade: number = this.model.layers.textCount() % 4;
     const item: TextItem = {
       content: text,
       color: this.textColor,
@@ -624,13 +625,8 @@ export struct ImageEditor {
       scale: 1,
       style: this.textStyle
     };
-    const list: TextItem[] = [];
-    for (const t of this.texts) {
-      list.push(t);
-    }
-    list.push(item);
-    this.texts = list;
-    this.selectedText = this.texts.length - 1;
+    // LayerStore.addText 会顺带选中新图层并标脏
+    this.model.layers.addText(item);
     this.textInput = '';
     this.showTextInput = false;
     this.dirty = true;
@@ -642,14 +638,8 @@ export struct ImageEditor {
   }
 
   removeText(idx: number): void {
-    const list: TextItem[] = [];
-    for (let i = 0; i < this.texts.length; i++) {
-      if (i !== idx) {
-        list.push(this.texts[i]);
-      }
-    }
-    this.texts = list;
-    this.selectedText = -1;
+    // 删除后的选中态由 LayerStore 修正（删的是选中项 → 取消选中；删的是它前面的项 → 下标前移）
+    this.model.layers.removeText(idx);
     this.dirty = true;
   }
 
@@ -678,13 +668,8 @@ export struct ImageEditor {
   /** 添加贴纸到画布（content 为 file:// 路径或相册临时 URI） */
   private pushSticker(content: string): void {
     const item: StickerItem = { content: content, x: 0, y: 0, scale: 1, angle: 0 };
-    const list: StickerItem[] = [];
-    for (const s of this.stickers) {
-      list.push(s);
-    }
-    list.push(item);
-    this.stickers = list;
-    this.selectedSticker = this.stickers.length - 1;
+    // LayerStore.addSticker 会顺带选中新图层并标脏
+    this.model.layers.addSticker(item);
     this.dirty = true;
   }
 
@@ -744,34 +729,18 @@ export struct ImageEditor {
 
   /** 删除贴纸 */
   removeSticker(idx: number): void {
-    const list: StickerItem[] = [];
-    for (let i = 0; i < this.stickers.length; i++) {
-      if (i !== idx) {
-        list.push(this.stickers[i]);
-      }
-    }
-    this.stickers = list;
-    this.selectedSticker = -1;
+    // 删除后的选中态由 LayerStore 修正（与文字同规则）
+    this.model.layers.removeSticker(idx);
     this.dirty = true;
   }
 
-  /** 重建贴纸数组（触发刷新） */
-  private refreshStickers(): void {
-    const list: StickerItem[] = [];
-    for (const s of this.stickers) {
-      list.push(s);
-    }
-    this.stickers = list;
-    this.dirty = true;
-  }
-
-  /** 切换文字风格（有选中文字则改选中项，否则作为默认） */
+  /** 切换文字风格（有选中文字则改选中项，否则作为新文字的默认） */
   setTextStyle(style: number): void {
     this.textStyle = style;
-    if (this.selectedText >= 0 && this.selectedText < this.texts.length) {
-      const t: TextItem = this.texts[this.selectedText];
-      t.style = style;
-      this.refreshTexts();
+    const idx: number = this.model.layers.selectedText();
+    if (idx >= 0) {
+      this.model.layers.setTextStyle(idx, style);
+      this.dirty = true;
     }
   }
 
@@ -781,29 +750,6 @@ export struct ImageEditor {
    */
   private sliderOffsetFor(baseSize: number, scale: number): number {
     return (baseSize * scale) / 2 + 40;
-  }
-
-  /** 文字阴影（按风格） */
-  private textShadowFor(t: TextItem): ShadowOptions | ShadowOptions[] {
-    if (t.style === 1) {
-      const s1: ShadowOptions = { radius: 4, color: '#66000000', offsetX: 1, offsetY: 2 };
-      return s1;
-    }
-    if (t.style === 2) {
-      const s2: ShadowOptions = { radius: 12, color: '#88FFFFFF', offsetX: 0, offsetY: 0 };
-      return s2;
-    }
-    if (t.style === 3) {
-      const s3: ShadowOptions[] = [
-        { radius: 0, color: '#000000', offsetX: 1, offsetY: 0 },
-        { radius: 0, color: '#000000', offsetX: -1, offsetY: 0 },
-        { radius: 0, color: '#000000', offsetX: 0, offsetY: 1 },
-        { radius: 0, color: '#000000', offsetX: 0, offsetY: -1 }
-      ];
-      return s3;
-    }
-    const s0: ShadowOptions = { radius: 0, color: '#00000000', offsetX: 0, offsetY: 0 };
-    return s0;
   }
 
   // ==================== 导出 ====================
@@ -824,10 +770,11 @@ export struct ImageEditor {
     const ctx: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
     let dest: string = '';
     try {
-      this.cropVisible = false;
+      this.model.canvas.cropVisible = false;
       // 离屏合成：底图原分辨率 + 文字 + 贴纸，不截屏幕（无灰边、无选中态红钮、不被降采样）
-      const buf: ArrayBuffer = await composeToJpeg(pm, this.curW, this.curH,
-        this.texts, this.stickers, this.dispRect(), this.previewW, this.previewH, 92);
+      const buf: ArrayBuffer = await composeToJpeg(pm, this.model.canvas.imageW, this.model.canvas.imageH,
+        this.model.layers.texts(), this.model.layers.stickers(), this.dispRect(),
+        this.model.canvas.previewW, this.model.canvas.previewH, 92);
       dest = `${ctx.filesDir}/zeroone_export_${Date.now()}.jpg`;
       const file = fileIo.openSync(dest, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
       fileIo.writeSync(file.fd, buf);
@@ -840,6 +787,7 @@ export struct ImageEditor {
       promptAction.showToast({ message: '已保存到相册 📷' });
       // 已导出成功：编辑成果已进相册，关闭时无需再提示"放弃编辑"
       this.dirty = false;
+      this.model.layers.markClean();
     } catch (e) {
       console.error(`export failed: ${JSON.stringify(e)}`);
       promptAction.showToast({ message: '保存失败，请重试' });
@@ -864,7 +812,7 @@ export struct ImageEditor {
       .borderRadius(14)
       .onClick(() => {
         this.tool = key;
-        if (key === 'crop' && !this.cropVisible) {
+        if (key === 'crop' && !this.model.canvas.cropVisible) {
           this.selectCropRatio('自由');
         }
       })
@@ -882,253 +830,6 @@ export struct ImageEditor {
       .onClick(() => {
         action();
       })
-  }
-
-  /** 选区外压暗条（纯视觉，不拦截触摸） */
-  @Builder
-  cropDim(x: number, y: number, w: number, h: number) {
-    Column()
-      .width(w)
-      .height(h)
-      .backgroundColor('#73000000')
-      .position({ x: x, y: y })
-      .hitTestBehavior(HitTestMode.None)
-  }
-
-  /**
-   * 文字图层渲染（阶段 5 第 3a 步：从 build() 里**原样搬出来**的 @Builder）
-   *
-   * 只搬家，逻辑与视觉一行未改。搬出来之后 build() 只剩"编排"，
-   * 下一步 3c 会把它连同贴纸层一起搬进 CanvasView 组件。
-   */
-  @Builder
-  textLayer(t: TextItem, idx: number) {
-    // 外层 Column：文字内容在上，选中态的缩放滑块在下，整体随 translate 移动
-    Column({ space: 4 }) {
-      Stack() {
-        Text(t.content)
-          // 显式用 vp：fontSize 传数字时默认单位是 fp（会跟随系统字体大小设置缩放），
-          // 而导出按 vp→像素换算。用户把系统字体调大后，
-          // 预览会变大、导出却不变 —— 这就是"所见非所得"。写死 vp 后两侧一致。
-          .fontSize(`${22 * t.scale}vp`)
-          .fontColor(t.color)
-          .fontWeight(FontWeight.Bold)
-          .textShadow(this.textShadowFor(t))
-          .textAlign(TextAlign.Center)
-          .constraintSize({ minWidth: 44, maxWidth: this.previewW - 48 })
-        if (this.selectedText === idx) {
-          Text('✕')
-            .fontSize(14)
-            .fontColor(Color.White)
-            .width(22)
-            .height(22)
-            .textAlign(TextAlign.Center)
-            .backgroundColor('#FF6B6B')
-            .borderRadius(11)
-            .offset({ x: 8, y: -8 })
-            .onClick(() => {
-              this.removeText(idx);
-            })
-        }
-      }
-      .alignContent(Alignment.TopEnd)
-      // 选中态加虚线边框，提示可操作区域；未选中无视觉干扰
-      .border(this.selectedText === idx ? { width: 1, color: '#FF6B6B', style: BorderStyle.Dashed } : { width: 0 })
-      .padding({ left: 6, right: 6, top: 4, bottom: 4 })
-    }
-    // Block：强制拦截触摸，全透明背景不再穿透到下层 Image
-    .hitTestBehavior(HitTestMode.Block)
-    .backgroundColor(Color.Transparent)
-    .padding({ left: 18, right: 18, top: 12, bottom: 12 })
-    // 拖动中叠加实时位移：只改标量，ForEach 不会重建整个列表
-    .translate({
-      x: t.x + (this.textDragIdx === idx ? this.textDragDx : 0),
-      y: t.y + (this.textDragIdx === idx ? this.textDragDy : 0)
-    })
-    .gesture(
-      PanGesture()
-        .onActionStart(() => {
-          this.selectedText = idx;
-          this.textBaseX = t.x;
-          this.textBaseY = t.y;
-          this.textDragIdx = idx;
-          this.textDragDx = 0;
-          this.textDragDy = 0;
-        })
-        .onActionUpdate((e: GestureEvent) => {
-          const limitX: number = this.previewW / 2 + 60;
-          const limitY: number = this.previewH / 2 + 60;
-          // 拖动中只更新实时增量：此前是"改 t.x/t.y → refreshTexts()"，
-          // 而 refreshTexts 会换掉数组引用，于是每一帧都重建全部文字节点。
-          this.textDragDx = Math.max(-limitX - this.textBaseX,
-            Math.min(limitX - this.textBaseX, e.offsetX));
-          this.textDragDy = Math.max(-limitY - this.textBaseY,
-            Math.min(limitY - this.textBaseY, e.offsetY));
-        })
-        .onActionEnd(() => {
-          // 松手才提交一次，并复位实时位移
-          t.x = this.textBaseX + this.textDragDx;
-          t.y = this.textBaseY + this.textDragDy;
-          this.textDragIdx = -1;
-          this.textDragDx = 0;
-          this.textDragDy = 0;
-          this.refreshTexts();
-        })
-    )
-    .parallelGesture(
-      PinchGesture()
-        .onActionStart(() => {
-          this.textBaseScale = t.scale;
-        })
-        .onActionUpdate((e: GestureEvent) => {
-          t.scale = Math.max(0.5, Math.min(4, this.textBaseScale * e.scale));
-          this.refreshTexts();
-        })
-    )
-
-    // 选中态滑杆：与文字本体同级的兄弟节点 → 只影响自身，不会挪动本体
-    if (this.selectedText === idx) {
-      Row({ space: 4 }) {
-        Text('A').fontSize(10).fontColor('#999999')
-        Slider({ value: t.scale, min: 0.5, max: 4, step: 0.1, style: SliderStyle.OutSet })
-          .layoutWeight(1)
-          .blockColor('#FF6B6B')
-          .selectedColor('#FF6B6B')
-          .trackColor('#E0E0E0')
-          .onChange((val: number) => {
-            t.scale = val;
-            this.refreshTexts();
-          })
-        Text('A').fontSize(18).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
-      }
-      .width(150)
-      .translate({ x: t.x, y: t.y + this.sliderOffsetFor(22, t.scale) })
-    }
-  }
-
-  /**
-   * 贴纸图层渲染（阶段 5 第 3b 步：从 build() 里**原样搬出来**的 @Builder）
-   *
-   * 与 textLayer 同理：只搬家不改逻辑。搬运期间 ImageEditor 始终可编译、可回滚。
-   */
-  @Builder
-  stickerLayer(s: StickerItem, idx: number) {
-    Column({ space: 4 }) {
-      Stack() {
-        Image(s.content)
-          .width(130 * s.scale)
-          .height(130 * s.scale)
-          .objectFit(ImageFit.Contain)
-          // 贴纸自身旋转（与工作台/画板一致的 双指旋转 能力）
-          .rotate({ angle: s.angle })
-        if (this.selectedSticker === idx) {
-          Text('✕')
-            .fontSize(14)
-            .fontColor(Color.White)
-            .width(22)
-            .height(22)
-            .textAlign(TextAlign.Center)
-            .backgroundColor('#FF6B6B')
-            .borderRadius(11)
-            .position({ x: 90 * s.scale, y: -10 })
-            .onClick(() => {
-              this.removeSticker(idx);
-            })
-        }
-      }
-      // 选中态虚线边框
-      .border(this.selectedSticker === idx ? { width: 1, color: '#FF6B6B', style: BorderStyle.Dashed } : { width: 0 })
-
-      // 选中态控件（大小 + 旋转）同样作为**兄弟节点**渲染（见下方），
-      // 放进本体里会把本体撑高，导致选中时位置与导出位置不一致。
-    }
-    .hitTestBehavior(HitTestMode.Block)
-    .backgroundColor(Color.Transparent)
-    .padding({ left: 18, right: 18, top: 12, bottom: 12 })
-    .translate({ x: s.x, y: s.y })
-    .gesture(
-      PanGesture()
-        .onActionStart(() => {
-          this.selectedSticker = idx;
-          this.textBaseX = s.x;
-          this.textBaseY = s.y;
-        })
-        .onActionUpdate((e: GestureEvent) => {
-          const half: number = 65 * s.scale;
-          const bx: number = Math.max(20, this.previewW / 2 - half);
-          const by: number = Math.max(20, this.previewH / 2 - half);
-          const nx: number = this.textBaseX + e.offsetX;
-          const ny: number = this.textBaseY + e.offsetY;
-          s.x = Math.max(-bx, Math.min(bx, nx));
-          s.y = Math.max(-by, Math.min(by, ny));
-          this.refreshStickers();
-        })
-    )
-    .parallelGesture(
-      PinchGesture()
-        .onActionStart(() => {
-          this.textBaseScale = s.scale;
-        })
-        .onActionUpdate((e: GestureEvent) => {
-          s.scale = Math.max(0.4, Math.min(5, this.textBaseScale * e.scale));
-          this.refreshStickers();
-        })
-    )
-    .parallelGesture(
-      // 双指旋转贴纸：此前编辑器贴纸根本转不了（工作台/画板都能转，体验割裂）
-      RotationGesture()
-        .onActionStart(() => {
-          this.selectedSticker = idx;
-          this.stickerBaseAngle = s.angle;
-        })
-        .onActionUpdate((e: GestureEvent) => {
-          // 基准角 + 手势角（用累加会对不上手指，这是之前文字拖动踩过的坑）
-          let next: number = this.stickerBaseAngle + e.angle;
-          // 归一化到 (-180, 180]，避免角度无限增大
-          while (next > 180) {
-            next -= 360;
-          }
-          while (next <= -180) {
-            next += 360;
-          }
-          s.angle = next;
-          this.refreshStickers();
-        })
-    )
-
-    // 选中态控件（兄弟节点）：大小 + 旋转，精确可控且不影响本体位置
-    if (this.selectedSticker === idx) {
-      Column({ space: 2 }) {
-        Row({ space: 4 }) {
-          Text('□').fontSize(10).fontColor('#999999')
-          Slider({ value: s.scale, min: 0.4, max: 5, step: 0.1, style: SliderStyle.OutSet })
-            .layoutWeight(1)
-            .blockColor('#FF6B6B')
-            .selectedColor('#FF6B6B')
-            .trackColor('#E0E0E0')
-            .onChange((val: number) => {
-              s.scale = val;
-              this.refreshStickers();
-            })
-          Text('□').fontSize(18).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
-        }
-        Row({ space: 4 }) {
-          Text('⟳').fontSize(12).fontColor('#999999')
-          Slider({ value: s.angle, min: -180, max: 180, step: 1, style: SliderStyle.OutSet })
-            .layoutWeight(1)
-            .blockColor('#FF6B6B')
-            .selectedColor('#FF6B6B')
-            .trackColor('#E0E0E0')
-            .onChange((val: number) => {
-              s.angle = val;
-              this.refreshStickers();
-            })
-          Text('⟳').fontSize(16).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
-        }
-      }
-      .width(170)
-      .translate({ x: s.x, y: s.y + this.sliderOffsetFor(130, s.scale) })
-    }
   }
 
   build() {
@@ -1187,258 +888,53 @@ export struct ImageEditor {
           .width('100%')
           .padding({ left: 10, right: 10, top: 8, bottom: 6 })
 
-          // ===== 预览区 =====
+          // ===== 预览区（画布渲染与手势已搬进 CanvasView；处理遮罩留在编排层） =====
           Stack() {
-            // 裁剪态：图片在选区内可拖动/缩放，选区外不可见（苹果照片式）
-            if (this.tool === 'crop' && this.cropVisible && this.curPixelMap !== undefined) {
-              // 选区内 clip 容器：只有这个区域内的图片可见
-              // 图片可拖动/缩放（苹果照片式：手指在选区内拖动图片，选区框固定不动）
-              Stack() {
-                // 内层容器 = 整个预览区的坐标系：图片在这里按 Contain 适配（与 dispRect 一致），
-                // 再整体反向平移，选区之外的部分由外层 clip 裁掉。
-                // 此前图片是直接按"选区尺寸"适配的 —— 选区一变图片就自己跳，
-                // 而且与裁剪换算对不上，这正是"框住的"和"裁出来的"不是一块的根因之一。
-                Stack() {
-                  Image(this.curPixelMap)
-                    .width('100%')
-                    .height('100%')
-                    .objectFit(ImageFit.Contain)
-                    .translate({ x: this.cropOffsetX, y: this.cropOffsetY })
-                    .scale({ x: this.cropScale, y: this.cropScale })
-                    .rotate({ angle: this.cropAngle })
-                    .gesture(
-                      PanGesture()
-                        .onActionStart(() => {
-                          this.cropPanBaseX = this.cropOffsetX;
-                          this.cropPanBaseY = this.cropOffsetY;
-                        })
-                        .onActionUpdate((e: GestureEvent) => {
-                          this.onCropImageDrag(e);
-                        })
-                    )
-                    .parallelGesture(
-                      PinchGesture()
-                        .onActionStart(() => {
-                          this.cropPinchBase = this.cropScale;
-                        })
-                        .onActionUpdate((e: GestureEvent) => {
-                          this.onCropImagePinch(e);
-                        })
-                    )
-                }
-                .width(this.previewW)
-                .height(this.previewH)
-                .position({ x: -this.cropX, y: -this.cropY })
+            // 画布：预览 Stack + 文字/贴纸图层 + 全部手势都在 CanvasView 里，
+            // 状态（画布 + 图层）唯一所有者仍是本组件：两个对象通过 @ObjectLink 传入
+            // （ArkUI V1 的 @ObjectLink 必须挂在真正被改的对象上，挂容器观察不到嵌套属性）
+            CanvasView({
+              state: this.model.canvas,
+              layers: this.model.layers,
+              pixelMap: this.curPixelMap,
+              tool: this.tool,
+              // 滑杆纵向偏移是纯函数（见 sliderOffsetFor），传给画布避免两边各写一份换算
+              offsetForSlider: (baseSize: number, scale: number): number => this.sliderOffsetFor(baseSize, scale),
+              // 回调：画布只回报"选中/删除/数据变了/裁剪手势位移"，状态改动仍由本组件执行
+              onSelectText: (idx: number): void => {
+                this.model.layers.selectText(idx);
+              },
+              onSelectSticker: (idx: number): void => {
+                this.model.layers.selectSticker(idx);
+              },
+              onRemoveText: (idx: number): void => {
+                this.removeText(idx);
+              },
+              onRemoveSticker: (idx: number): void => {
+                this.removeSticker(idx);
+              },
+              onLayersChanged: (): void => {
+                this.dirty = true;
+              },
+              onCropDragStart: (): void => {
+                this.onCropDragStart();
+              },
+              onCropDragUpdate: (dx: number, dy: number): void => {
+                this.onCropDragUpdate(dx, dy);
+              },
+              onCropPinchStart: (): void => {
+                this.onCropPinchStart();
+              },
+              onCropPinchUpdate: (scale: number): void => {
+                this.onCropPinchUpdate(scale);
+              },
+              onCropHandleStart: (): void => {
+                this.onCropHandleStart();
+              },
+              onCropHandleDrag: (type: number, dx: number, dy: number): void => {
+                this.onCropHandleDrag(type, dx, dy);
               }
-              .width(this.cropW)
-              .height(this.cropH)
-              .position({ x: this.cropX, y: this.cropY })
-              .clip(true)
-
-              // 暗色遮罩：选区外完全不透明（盖住图片溢出部分）
-              if (this.cropY > 0) {
-                this.cropDim(0, 0, this.previewW, this.cropY)
-              }
-              if (this.cropY + this.cropH < this.previewH) {
-                this.cropDim(0, this.cropY + this.cropH, this.previewW, this.previewH - this.cropY - this.cropH)
-              }
-              if (this.cropX > 0) {
-                this.cropDim(0, this.cropY, this.cropX, this.cropH)
-              }
-              if (this.cropX + this.cropW < this.previewW) {
-                this.cropDim(this.cropX + this.cropW, this.cropY, this.previewW - this.cropX - this.cropW, this.cropH)
-              }
-
-              // 选区框：白色细边框（苹果风格），纯视觉层
-              // hitTestBehavior(None) 让触摸穿透到下层图片，由图片处理拖动
-              // 选区框位置只能通过比例选择和把手拖拽改变（苹果照片式）
-              Column()
-                .width(this.cropW)
-                .height(this.cropH)
-                .border({ width: 1.5, color: Color.White })
-                .backgroundColor(Color.Transparent)
-                .position({ x: this.cropX, y: this.cropY })
-                .hitTestBehavior(HitTestMode.None)
-
-              // 四角把手：白色 L 型（苹果风格），内联以响应状态更新
-              // 左上角
-              Stack() {
-                Column().width(20).height(3).backgroundColor(Color.White).position({ x: 0, y: 0 })
-                Column().width(3).height(20).backgroundColor(Color.White).position({ x: 0, y: 0 })
-              }
-              .width(20)
-              .height(20)
-              .position({ x: this.cropX - 2, y: this.cropY - 2 })
-              .responseRegion({ x: -12, y: -12, width: 44, height: 44 })
-              .gesture(
-                PanGesture()
-                  .onActionStart(() => {
-                    this.handleBase = { x: this.cropX, y: this.cropY, w: this.cropW, h: this.cropH };
-                  })
-                  .onActionUpdate((e: GestureEvent) => {
-                    this.onCropHandleDrag(0, e);
-                  })
-              )
-              // 右上角
-              Stack() {
-                Column().width(20).height(3).backgroundColor(Color.White).position({ x: 0, y: 0 })
-                Column().width(3).height(20).backgroundColor(Color.White).position({ x: 17, y: 0 })
-              }
-              .width(20)
-              .height(20)
-              .position({ x: this.cropX + this.cropW - 18, y: this.cropY - 2 })
-              .responseRegion({ x: -12, y: -12, width: 44, height: 44 })
-              .gesture(
-                PanGesture()
-                  .onActionStart(() => {
-                    this.handleBase = { x: this.cropX, y: this.cropY, w: this.cropW, h: this.cropH };
-                  })
-                  .onActionUpdate((e: GestureEvent) => {
-                    this.onCropHandleDrag(1, e);
-                  })
-              )
-              // 左下角
-              Stack() {
-                Column().width(20).height(3).backgroundColor(Color.White).position({ x: 0, y: 17 })
-                Column().width(3).height(20).backgroundColor(Color.White).position({ x: 0, y: 0 })
-              }
-              .width(20)
-              .height(20)
-              .position({ x: this.cropX - 2, y: this.cropY + this.cropH - 18 })
-              .responseRegion({ x: -12, y: -12, width: 44, height: 44 })
-              .gesture(
-                PanGesture()
-                  .onActionStart(() => {
-                    this.handleBase = { x: this.cropX, y: this.cropY, w: this.cropW, h: this.cropH };
-                  })
-                  .onActionUpdate((e: GestureEvent) => {
-                    this.onCropHandleDrag(2, e);
-                  })
-              )
-              // 右下角
-              Stack() {
-                Column().width(20).height(3).backgroundColor(Color.White).position({ x: 0, y: 17 })
-                Column().width(3).height(20).backgroundColor(Color.White).position({ x: 17, y: 0 })
-              }
-              .width(20)
-              .height(20)
-              .position({ x: this.cropX + this.cropW - 18, y: this.cropY + this.cropH - 18 })
-              .responseRegion({ x: -12, y: -12, width: 44, height: 44 })
-              .gesture(
-                PanGesture()
-                  .onActionStart(() => {
-                    this.handleBase = { x: this.cropX, y: this.cropY, w: this.cropW, h: this.cropH };
-                  })
-                  .onActionUpdate((e: GestureEvent) => {
-                    this.onCropHandleDrag(3, e);
-                  })
-              )
-
-              // 四边把手：白色细条（苹果风格），内联以响应状态更新
-              // 上边中点
-              Column()
-                .width(30).height(3).borderRadius(1.5).backgroundColor(Color.White)
-                .position({ x: this.cropX + this.cropW / 2 - 15, y: this.cropY - 2 })
-                .responseRegion({ x: -18, y: -14, width: 66, height: 31 })
-                .gesture(
-                  PanGesture()
-                    .onActionStart(() => {
-                      this.handleBase = { x: this.cropX, y: this.cropY, w: this.cropW, h: this.cropH };
-                    })
-                    .onActionUpdate((e: GestureEvent) => {
-                      this.onCropHandleDrag(4, e);
-                    })
-                )
-              // 右边中点
-              Column()
-                .width(3).height(30).borderRadius(1.5).backgroundColor(Color.White)
-                .position({ x: this.cropX + this.cropW - 2, y: this.cropY + this.cropH / 2 - 15 })
-                .responseRegion({ x: -14, y: -18, width: 31, height: 66 })
-                .gesture(
-                  PanGesture()
-                    .onActionStart(() => {
-                      this.handleBase = { x: this.cropX, y: this.cropY, w: this.cropW, h: this.cropH };
-                    })
-                    .onActionUpdate((e: GestureEvent) => {
-                      this.onCropHandleDrag(5, e);
-                    })
-                )
-              // 下边中点
-              Column()
-                .width(30).height(3).borderRadius(1.5).backgroundColor(Color.White)
-                .position({ x: this.cropX + this.cropW / 2 - 15, y: this.cropY + this.cropH - 2 })
-                .responseRegion({ x: -18, y: -14, width: 66, height: 31 })
-                .gesture(
-                  PanGesture()
-                    .onActionStart(() => {
-                      this.handleBase = { x: this.cropX, y: this.cropY, w: this.cropW, h: this.cropH };
-                    })
-                    .onActionUpdate((e: GestureEvent) => {
-                      this.onCropHandleDrag(6, e);
-                    })
-                )
-              // 左边中点
-              Column()
-                .width(3).height(30).borderRadius(1.5).backgroundColor(Color.White)
-                .position({ x: this.cropX - 2, y: this.cropY + this.cropH / 2 - 15 })
-                .responseRegion({ x: -14, y: -18, width: 31, height: 66 })
-                .gesture(
-                  PanGesture()
-                    .onActionStart(() => {
-                      this.handleBase = { x: this.cropX, y: this.cropY, w: this.cropW, h: this.cropH };
-                    })
-                    .onActionUpdate((e: GestureEvent) => {
-                      this.onCropHandleDrag(7, e);
-                    })
-                )
-
-              // 九宫格辅助线（2 横 2 竖，把选区分成 9 等份，辅助构图）
-              Column()
-                .width(this.cropW)
-                .height(0.5)
-                .backgroundColor('#80FFFFFF')
-                .position({ x: this.cropX, y: this.cropY + this.cropH / 3 })
-                .hitTestBehavior(HitTestMode.None)
-              Column()
-                .width(this.cropW)
-                .height(0.5)
-                .backgroundColor('#80FFFFFF')
-                .position({ x: this.cropX, y: this.cropY + this.cropH * 2 / 3 })
-                .hitTestBehavior(HitTestMode.None)
-              Column()
-                .width(0.5)
-                .height(this.cropH)
-                .backgroundColor('#80FFFFFF')
-                .position({ x: this.cropX + this.cropW / 3, y: this.cropY })
-                .hitTestBehavior(HitTestMode.None)
-              Column()
-                .width(0.5)
-                .height(this.cropH)
-                .backgroundColor('#80FFFFFF')
-                .position({ x: this.cropX + this.cropW * 2 / 3, y: this.cropY })
-                .hitTestBehavior(HitTestMode.None)
-            }
-            if (!(this.tool === 'crop' && this.cropVisible)) {
-              // 非裁剪态：图片不可移动
-              Image(this.curPixelMap)
-                .width('100%')
-                .height('100%')
-                .objectFit(ImageFit.Contain)
-            }
-
-            // 裁剪态下隐藏文字/贴纸：它们不参与裁剪，且会浮在选区上方抢走拖动手势
-            if (!(this.tool === 'crop' && this.cropVisible)) {
-            // 文字叠加（多行 + 风格）—— 渲染内容已搬到 @Builder textLayer()（阶段 5 第 3a 步）
-            ForEach(this.texts, (t: TextItem, idx: number) => {
-              this.textLayer(t, idx)
-            }, (t: TextItem, idx: number) => idx.toString())
-
-            // ===== 贴纸层（抠图/相册 PNG，可拖拽缩放旋转） =====
-            // 贴纸层渲染内容已搬到 @Builder stickerLayer()（阶段 5 第 3b 步）
-            ForEach(this.stickers, (s: StickerItem, idx: number) => {
-              this.stickerLayer(s, idx)
-            }, (s: StickerItem, idx: number) => idx.toString())
-            }
+            })
 
             // ===== 后台处理遮罩（滤镜/纹理 TaskPool 执行期间，盖在预览最上层） =====
             if (this.processing) {
@@ -1463,9 +959,9 @@ export struct ImageEditor {
           .layoutWeight(1)
           .backgroundColor('#EEEEEE')
           .onAreaChange((oldValue: Area, newValue: Area) => {
-            this.previewW = newValue.width as number;
-            this.previewH = newValue.height as number;
-            this.invalidateDisp();
+            // 预览区尺寸是画布状态的一部分（裁剪换算要读它）：写进 model.canvas，不做副本
+            this.model.canvas.previewW = newValue.width as number;
+            this.model.canvas.previewH = newValue.height as number;
           })
 
           // ===== 工具 tab（横向滚动，防止 chip 被截断） =====
@@ -1514,9 +1010,16 @@ export struct ImageEditor {
                     ForEach(['自由', '1:1', '4:3', '3:4', '16:9', '9:16'], (r: string) => {
                       Text(r)
                         .fontSize(13)
-                        .fontColor(this.cropVisible && this.cropRatio === r ? Color.White : '#555555')
-                        .backgroundColor(this.cropVisible && this.cropRatio === r ? '#FF6B6B' : Color.White)
-                        .border({ width: 1, color: this.cropVisible && this.cropRatio === r ? '#FF6B6B' : '#DDDDDD' })
+                        // 读走 this.canvas.*：本组件是 canvas 的订阅者，这里才会跟着重绘
+                        .fontColor(this.canvas.cropVisible && this.canvas.cropRatio === r
+                          ? Color.White : '#555555')
+                        .backgroundColor(this.canvas.cropVisible && this.canvas.cropRatio === r
+                          ? '#FF6B6B' : Color.White)
+                        .border({
+                          width: 1,
+                          color: this.canvas.cropVisible && this.canvas.cropRatio === r
+                            ? '#FF6B6B' : '#DDDDDD'
+                        })
                         .padding({ left: 14, right: 14, top: 7, bottom: 7 })
                         .borderRadius(16)
                         .onClick(() => {
@@ -1566,12 +1069,8 @@ export struct ImageEditor {
                     .padding({ left: 20, right: 20, top: 8, bottom: 8 })
                     .borderRadius(18)
                     .onClick(() => {
-                      this.cropVisible = false;
-                      this.cropRatio = '自由';
-                      this.cropOffsetX = 0;
-                      this.cropOffsetY = 0;
-                      this.cropScale = 1;
-                      this.cropAngle = 0;
+                      // 退出裁剪态并复位（选区、比例、图片变换）
+                      this.model.canvas.clearCrop();
                     })
                   Text('✓ 应用')
                     .fontSize(13)
@@ -1678,8 +1177,8 @@ export struct ImageEditor {
                         this.showTextInput = true;
                       })
                       this.opButton('清除全部', () => {
-                        this.texts = [];
-                        this.selectedText = -1;
+                        this.model.layers.clearTexts();
+                        this.dirty = true;
                       })
                     }
                     .width('100%')
@@ -1700,10 +1199,10 @@ export struct ImageEditor {
                             .onClick(() => {
                               this.textColor = c;
                               // 已有选中文字时立即换色（与风格按钮行为一致），否则只作为新文字默认色
-                              if (this.selectedText >= 0 && this.selectedText < this.texts.length) {
-                                const t: TextItem = this.texts[this.selectedText];
-                                t.color = c;
-                                this.refreshTexts();
+                              const idx: number = this.model.layers.selectedText();
+                              if (idx >= 0) {
+                                this.model.layers.setTextColor(idx, c);
+                                this.dirty = true;
                               }
                             })
                         })
@@ -1832,8 +1331,8 @@ export struct ImageEditor {
                       this.pickStickerFromAlbum();
                     })
                     this.opButton('🗑 清除贴纸', () => {
-                      this.stickers = [];
-                      this.selectedSticker = -1;
+                      this.model.layers.clearStickers();
+                      this.dirty = true;
                     })
                   }
                   .width('100%')
