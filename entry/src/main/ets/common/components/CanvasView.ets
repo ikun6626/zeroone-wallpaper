@@ -4,6 +4,21 @@ import { ObservableCanvasState, ObservableLayerStore } from '../editor/EditorCan
 import { LayerKind } from '../editor/LayerStore';
 
 /**
+ * 裁剪覆盖层配色（集中一处，方便以后做暗色模式/主题化）
+ *
+ * 之前全是硬编码白色，浅色图（天空、白墙）上选区框几乎看不见；
+ * 现在按"可移动边框用黑色"来配：框与九宫格用黑，把手用**黑底白边**
+ * （深色图上靠白边勾出轮廓，浅色图上靠黑底站得住）。
+ */
+const CROP_DIM_COLOR: string = '#73000000';
+const CROP_FRAME_COLOR: string = '#111114';
+const CROP_FRAME_WIDTH: number = 1.5;
+const CROP_GRID_COLOR: string = '#80000000';
+const CROP_HANDLE_FILL: string = '#111114';
+const CROP_HANDLE_EDGE: string = '#FFFFFF';
+const CROP_HANDLE_EDGE_WIDTH: number = 0.5;
+
+/**
  * CanvasView —— 画布（阶段 5 第 3c 步：预览 Stack + 文字/贴纸图层 + 全部手势，从 ImageEditor 搬出来）
  *
  * 职责边界（接口契约见 RESTRUCTURE-PLAN.md「三之二、3c/3d 接口契约」）：
@@ -97,9 +112,20 @@ export struct CanvasView {
     Column()
       .width(w)
       .height(h)
-      .backgroundColor('#73000000')
+      .backgroundColor(CROP_DIM_COLOR)
       .position({ x: x, y: y })
       .hitTestBehavior(HitTestMode.None)
+  }
+
+  /** 把手的一条描边（角把手两条，边把手一条）：黑底白边，深浅图上都能看清 */
+  @Builder
+  handleBar(w: number, h: number, x: number, y: number) {
+    Column()
+      .width(w)
+      .height(h)
+      .backgroundColor(CROP_HANDLE_FILL)
+      .border({ width: CROP_HANDLE_EDGE_WIDTH, color: CROP_HANDLE_EDGE })
+      .position({ x: x, y: y })
   }
 
   /**
@@ -205,7 +231,11 @@ export struct CanvasView {
         Text('A').fontSize(18).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
       }
       .width(150)
-      .translate({ x: t.x, y: t.y + this.offsetForSlider(22, t.scale) })
+      // 拖动中滑杆要跟本体一起走：本体渲染用的是 t.x/t.y + 实时增量，这里必须加同一份
+      .translate({
+        x: t.x + this.layers.liveDx(LayerKind.TEXT, idx),
+        y: t.y + this.layers.liveDy(LayerKind.TEXT, idx) + this.offsetForSlider(22, t.scale)
+      })
     }
   }
 
@@ -340,7 +370,11 @@ export struct CanvasView {
         }
       }
       .width(170)
-      .translate({ x: s.x, y: s.y + this.offsetForSlider(130, s.scale) })
+      // 同上：贴纸的"大小 / 旋转"控件要跟着贴纸本体一起移动
+      .translate({
+        x: s.x + this.layers.liveDx(LayerKind.STICKER, idx),
+        y: s.y + this.layers.liveDy(LayerKind.STICKER, idx) + this.offsetForSlider(130, s.scale)
+      })
     }
   }
 
@@ -414,16 +448,16 @@ export struct CanvasView {
         Column()
           .width(this.state.cropW)
           .height(this.state.cropH)
-          .border({ width: 1.5, color: Color.White })
+          .border({ width: CROP_FRAME_WIDTH, color: CROP_FRAME_COLOR })
           .backgroundColor(Color.Transparent)
           .position({ x: this.state.cropX, y: this.state.cropY })
           .hitTestBehavior(HitTestMode.None)
 
-        // 四角把手：白色 L 型（苹果风格），内联以响应状态更新
+        // 四角把手：黑底白边 L 型，内联以响应状态更新
         // 左上角
         Stack() {
-          Column().width(20).height(3).backgroundColor(Color.White).position({ x: 0, y: 0 })
-          Column().width(3).height(20).backgroundColor(Color.White).position({ x: 0, y: 0 })
+          this.handleBar(20, 3, 0, 0)
+          this.handleBar(3, 20, 0, 0)
         }
         .width(20)
         .height(20)
@@ -440,8 +474,8 @@ export struct CanvasView {
         )
         // 右上角
         Stack() {
-          Column().width(20).height(3).backgroundColor(Color.White).position({ x: 0, y: 0 })
-          Column().width(3).height(20).backgroundColor(Color.White).position({ x: 17, y: 0 })
+          this.handleBar(20, 3, 0, 0)
+          this.handleBar(3, 20, 17, 0)
         }
         .width(20)
         .height(20)
@@ -458,8 +492,8 @@ export struct CanvasView {
         )
         // 左下角
         Stack() {
-          Column().width(20).height(3).backgroundColor(Color.White).position({ x: 0, y: 17 })
-          Column().width(3).height(20).backgroundColor(Color.White).position({ x: 0, y: 0 })
+          this.handleBar(20, 3, 0, 17)
+          this.handleBar(3, 20, 0, 0)
         }
         .width(20)
         .height(20)
@@ -476,8 +510,8 @@ export struct CanvasView {
         )
         // 右下角
         Stack() {
-          Column().width(20).height(3).backgroundColor(Color.White).position({ x: 0, y: 17 })
-          Column().width(3).height(20).backgroundColor(Color.White).position({ x: 17, y: 0 })
+          this.handleBar(20, 3, 0, 17)
+          this.handleBar(3, 20, 17, 0)
         }
         .width(20)
         .height(20)
@@ -496,10 +530,11 @@ export struct CanvasView {
             })
         )
 
-        // 四边把手：白色细条（苹果风格），内联以响应状态更新
+        // 四边把手：黑底白边细条，内联以响应状态更新
         // 上边中点
         Column()
-          .width(30).height(3).borderRadius(1.5).backgroundColor(Color.White)
+          .width(30).height(3).borderRadius(1.5).backgroundColor(CROP_HANDLE_FILL)
+          .border({ width: CROP_HANDLE_EDGE_WIDTH, color: CROP_HANDLE_EDGE })
           .position({ x: this.state.cropX + this.state.cropW / 2 - 15, y: this.state.cropY - 2 })
           .responseRegion({ x: -18, y: -14, width: 66, height: 31 })
           .gesture(
@@ -513,7 +548,8 @@ export struct CanvasView {
           )
         // 右边中点
         Column()
-          .width(3).height(30).borderRadius(1.5).backgroundColor(Color.White)
+          .width(3).height(30).borderRadius(1.5).backgroundColor(CROP_HANDLE_FILL)
+          .border({ width: CROP_HANDLE_EDGE_WIDTH, color: CROP_HANDLE_EDGE })
           .position({
             x: this.state.cropX + this.state.cropW - 2,
             y: this.state.cropY + this.state.cropH / 2 - 15
@@ -530,7 +566,8 @@ export struct CanvasView {
           )
         // 下边中点
         Column()
-          .width(30).height(3).borderRadius(1.5).backgroundColor(Color.White)
+          .width(30).height(3).borderRadius(1.5).backgroundColor(CROP_HANDLE_FILL)
+          .border({ width: CROP_HANDLE_EDGE_WIDTH, color: CROP_HANDLE_EDGE })
           .position({
             x: this.state.cropX + this.state.cropW / 2 - 15,
             y: this.state.cropY + this.state.cropH - 2
@@ -547,7 +584,8 @@ export struct CanvasView {
           )
         // 左边中点
         Column()
-          .width(3).height(30).borderRadius(1.5).backgroundColor(Color.White)
+          .width(3).height(30).borderRadius(1.5).backgroundColor(CROP_HANDLE_FILL)
+          .border({ width: CROP_HANDLE_EDGE_WIDTH, color: CROP_HANDLE_EDGE })
           .position({
             x: this.state.cropX - 2,
             y: this.state.cropY + this.state.cropH / 2 - 15
@@ -567,25 +605,25 @@ export struct CanvasView {
         Column()
           .width(this.state.cropW)
           .height(0.5)
-          .backgroundColor('#80FFFFFF')
+          .backgroundColor(CROP_GRID_COLOR)
           .position({ x: this.state.cropX, y: this.state.cropY + this.state.cropH / 3 })
           .hitTestBehavior(HitTestMode.None)
         Column()
           .width(this.state.cropW)
           .height(0.5)
-          .backgroundColor('#80FFFFFF')
+          .backgroundColor(CROP_GRID_COLOR)
           .position({ x: this.state.cropX, y: this.state.cropY + this.state.cropH * 2 / 3 })
           .hitTestBehavior(HitTestMode.None)
         Column()
           .width(0.5)
           .height(this.state.cropH)
-          .backgroundColor('#80FFFFFF')
+          .backgroundColor(CROP_GRID_COLOR)
           .position({ x: this.state.cropX + this.state.cropW / 3, y: this.state.cropY })
           .hitTestBehavior(HitTestMode.None)
         Column()
           .width(0.5)
           .height(this.state.cropH)
-          .backgroundColor('#80FFFFFF')
+          .backgroundColor(CROP_GRID_COLOR)
           .position({ x: this.state.cropX + this.state.cropW * 2 / 3, y: this.state.cropY })
           .hitTestBehavior(HitTestMode.None)
       }
