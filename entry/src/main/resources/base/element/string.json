@@ -11,10 +11,6 @@
     {
       "name": "EntryAbility_label",
       "value": "ZeroOne壁纸"
-    },
-    {
-      "name": "read_media_reason",
-      "value": "用于选择本地图片上传为壁纸"
     }
   ]
 }

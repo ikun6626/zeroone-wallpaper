@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-09-12 工程清理（git 基线 + 死代码删除 + 权限瘦身）
+
+| 项 | 内容 |
+|---|---|
+| 纳入版本控制 | 工程此前**无 git**（改错不可回滚，也是死代码"不敢删"的原因）。已建立本地仓库并提交改造前基线，此后所有改动走提交历史。 |
+| 删除死代码 | 删除 `common/components/StickerCanvasComponent.ets`、`common/sticker/{StickerProcessor,WallpaperExporter}.ets`、`pages/PhotoEditorPage.ets`、`common/photoeditor/{model/EditState,service/ImageRenderer,utils/CoordinateMapper}.ets` 共 7 个文件，连同 `DEPRECATED.md` 一并删除，空目录 `common/sticker/`、`common/photoeditor/` 移除。删除前 grep 复核：全工程唯一的外部引用只剩 `PixelScope.ets` 注释里的一处举例（已改写），`main_pages.json` 也未注册 `PhotoEditorPage`。 |
+| 权限瘦身 | 移除 `ohos.permission.READ_MEDIA` 及其 `read_media_reason` 文案。相册读取走 `PhotoViewPicker`（系统选择器免权限）、写入走 `SaveButton` 临时授权，代码中不存在任何需要该权限的调用。现仅声明 `ohos.permission.INTERNET`。 |
+| 忽略规则 | `.gitignore` 追加：签名密钥材料（`*.p12`/`*.csr`/`*.p7b`/`*.cer`）、DevEco `material/` 缓存、与本工程无关的 `dsh-deep-whale/`、仓库目录自身。 |
+| 文档同步 | `ARCHITECTURE.md` 删除"已隔离（无调用方）"子图与 DEPRECATED 表行；`DELIVERY.md` 代码结构与"已知取舍"按删除后的状态更新。 |
+
+---
+
 ## 2026-09-12 交互与商业化审计整改（方案一~六 + 收尾）
 
 > 起因：对全工程做了一次**交互与商业合理性审计**，共 15 项问题（高/中/低分级）。

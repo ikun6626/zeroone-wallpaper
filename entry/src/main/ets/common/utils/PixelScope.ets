@@ -21,8 +21,8 @@ const DEFER_MS: number = 300;
  *
  * 页面/组件销毁时调用 dispose()，把当前持有与待释放的全部清掉。
  *
- * 所有权约定：返回 `Promise<image.PixelMap>` 的工具方法（StickerProcessor.generateSticker、
- * WallpaperExporter.capture 等）都是**把所有权转移给调用方**，调用方负责 release。
+ * 所有权约定：返回 `Promise<image.PixelMap>` 的工具方法（如 ImageComposer.composeToPixelMap、
+ * FilterTask 的并发滤镜等）都是**把所有权转移给调用方**，调用方负责 release。
  */
 export class PixelScope {
   /** 当前持有并正在展示的资源 */
