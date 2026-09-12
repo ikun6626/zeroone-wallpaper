@@ -1006,6 +1006,131 @@ export struct ImageEditor {
     }
   }
 
+  /**
+   * 贴纸图层渲染（阶段 5 第 3b 步：从 build() 里**原样搬出来**的 @Builder）
+   *
+   * 与 textLayer 同理：只搬家不改逻辑。搬运期间 ImageEditor 始终可编译、可回滚。
+   */
+  @Builder
+  stickerLayer(s: StickerItem, idx: number) {
+    Column({ space: 4 }) {
+      Stack() {
+        Image(s.content)
+          .width(130 * s.scale)
+          .height(130 * s.scale)
+          .objectFit(ImageFit.Contain)
+          // 贴纸自身旋转（与工作台/画板一致的 双指旋转 能力）
+          .rotate({ angle: s.angle })
+        if (this.selectedSticker === idx) {
+          Text('✕')
+            .fontSize(14)
+            .fontColor(Color.White)
+            .width(22)
+            .height(22)
+            .textAlign(TextAlign.Center)
+            .backgroundColor('#FF6B6B')
+            .borderRadius(11)
+            .position({ x: 90 * s.scale, y: -10 })
+            .onClick(() => {
+              this.removeSticker(idx);
+            })
+        }
+      }
+      // 选中态虚线边框
+      .border(this.selectedSticker === idx ? { width: 1, color: '#FF6B6B', style: BorderStyle.Dashed } : { width: 0 })
+
+      // 选中态控件（大小 + 旋转）同样作为**兄弟节点**渲染（见下方），
+      // 放进本体里会把本体撑高，导致选中时位置与导出位置不一致。
+    }
+    .hitTestBehavior(HitTestMode.Block)
+    .backgroundColor(Color.Transparent)
+    .padding({ left: 18, right: 18, top: 12, bottom: 12 })
+    .translate({ x: s.x, y: s.y })
+    .gesture(
+      PanGesture()
+        .onActionStart(() => {
+          this.selectedSticker = idx;
+          this.textBaseX = s.x;
+          this.textBaseY = s.y;
+        })
+        .onActionUpdate((e: GestureEvent) => {
+          const half: number = 65 * s.scale;
+          const bx: number = Math.max(20, this.previewW / 2 - half);
+          const by: number = Math.max(20, this.previewH / 2 - half);
+          const nx: number = this.textBaseX + e.offsetX;
+          const ny: number = this.textBaseY + e.offsetY;
+          s.x = Math.max(-bx, Math.min(bx, nx));
+          s.y = Math.max(-by, Math.min(by, ny));
+          this.refreshStickers();
+        })
+    )
+    .parallelGesture(
+      PinchGesture()
+        .onActionStart(() => {
+          this.textBaseScale = s.scale;
+        })
+        .onActionUpdate((e: GestureEvent) => {
+          s.scale = Math.max(0.4, Math.min(5, this.textBaseScale * e.scale));
+          this.refreshStickers();
+        })
+    )
+    .parallelGesture(
+      // 双指旋转贴纸：此前编辑器贴纸根本转不了（工作台/画板都能转，体验割裂）
+      RotationGesture()
+        .onActionStart(() => {
+          this.selectedSticker = idx;
+          this.stickerBaseAngle = s.angle;
+        })
+        .onActionUpdate((e: GestureEvent) => {
+          // 基准角 + 手势角（用累加会对不上手指，这是之前文字拖动踩过的坑）
+          let next: number = this.stickerBaseAngle + e.angle;
+          // 归一化到 (-180, 180]，避免角度无限增大
+          while (next > 180) {
+            next -= 360;
+          }
+          while (next <= -180) {
+            next += 360;
+          }
+          s.angle = next;
+          this.refreshStickers();
+        })
+    )
+
+    // 选中态控件（兄弟节点）：大小 + 旋转，精确可控且不影响本体位置
+    if (this.selectedSticker === idx) {
+      Column({ space: 2 }) {
+        Row({ space: 4 }) {
+          Text('□').fontSize(10).fontColor('#999999')
+          Slider({ value: s.scale, min: 0.4, max: 5, step: 0.1, style: SliderStyle.OutSet })
+            .layoutWeight(1)
+            .blockColor('#FF6B6B')
+            .selectedColor('#FF6B6B')
+            .trackColor('#E0E0E0')
+            .onChange((val: number) => {
+              s.scale = val;
+              this.refreshStickers();
+            })
+          Text('□').fontSize(18).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
+        }
+        Row({ space: 4 }) {
+          Text('⟳').fontSize(12).fontColor('#999999')
+          Slider({ value: s.angle, min: -180, max: 180, step: 1, style: SliderStyle.OutSet })
+            .layoutWeight(1)
+            .blockColor('#FF6B6B')
+            .selectedColor('#FF6B6B')
+            .trackColor('#E0E0E0')
+            .onChange((val: number) => {
+              s.angle = val;
+              this.refreshStickers();
+            })
+          Text('⟳').fontSize(16).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
+        }
+      }
+      .width(170)
+      .translate({ x: s.x, y: s.y + this.sliderOffsetFor(130, s.scale) })
+    }
+  }
+
   build() {
     Stack() {
       if (this.loading) {
@@ -1309,124 +1434,9 @@ export struct ImageEditor {
             }, (t: TextItem, idx: number) => idx.toString())
 
             // ===== 贴纸层（抠图/相册 PNG，可拖拽缩放旋转） =====
+            // 贴纸层渲染内容已搬到 @Builder stickerLayer()（阶段 5 第 3b 步）
             ForEach(this.stickers, (s: StickerItem, idx: number) => {
-              Column({ space: 4 }) {
-                Stack() {
-                  Image(s.content)
-                    .width(130 * s.scale)
-                    .height(130 * s.scale)
-                    .objectFit(ImageFit.Contain)
-                    // 贴纸自身旋转（与工作台/画板一致的 双指旋转 能力）
-                    .rotate({ angle: s.angle })
-                  if (this.selectedSticker === idx) {
-                    Text('✕')
-                      .fontSize(14)
-                      .fontColor(Color.White)
-                      .width(22)
-                      .height(22)
-                      .textAlign(TextAlign.Center)
-                      .backgroundColor('#FF6B6B')
-                      .borderRadius(11)
-                      .position({ x: 90 * s.scale, y: -10 })
-                      .onClick(() => {
-                        this.removeSticker(idx);
-                      })
-                  }
-                }
-                // 选中态虚线边框
-                .border(this.selectedSticker === idx ? { width: 1, color: '#FF6B6B', style: BorderStyle.Dashed } : { width: 0 })
-
-                // 选中态控件（大小 + 旋转）同样作为**兄弟节点**渲染（见下方），
-                // 放进本体里会把本体撑高，导致选中时位置与导出位置不一致。
-
-              }
-              .hitTestBehavior(HitTestMode.Block)
-              .backgroundColor(Color.Transparent)
-              .padding({ left: 18, right: 18, top: 12, bottom: 12 })
-              .translate({ x: s.x, y: s.y })
-              .gesture(
-                PanGesture()
-                  .onActionStart(() => {
-                    this.selectedSticker = idx;
-                    this.textBaseX = s.x;
-                    this.textBaseY = s.y;
-                  })
-                  .onActionUpdate((e: GestureEvent) => {
-                    const half: number = 65 * s.scale;
-                    const bx: number = Math.max(20, this.previewW / 2 - half);
-                    const by: number = Math.max(20, this.previewH / 2 - half);
-                    const nx: number = this.textBaseX + e.offsetX;
-                    const ny: number = this.textBaseY + e.offsetY;
-                    s.x = Math.max(-bx, Math.min(bx, nx));
-                    s.y = Math.max(-by, Math.min(by, ny));
-                    this.refreshStickers();
-                  })
-              )
-              .parallelGesture(
-                PinchGesture()
-                  .onActionStart(() => {
-                    this.textBaseScale = s.scale;
-                  })
-                  .onActionUpdate((e: GestureEvent) => {
-                    s.scale = Math.max(0.4, Math.min(5, this.textBaseScale * e.scale));
-                    this.refreshStickers();
-                  })
-              )
-              .parallelGesture(
-                // 双指旋转贴纸：此前编辑器贴纸根本转不了（工作台/画板都能转，体验割裂）
-                RotationGesture()
-                  .onActionStart(() => {
-                    this.selectedSticker = idx;
-                    this.stickerBaseAngle = s.angle;
-                  })
-                  .onActionUpdate((e: GestureEvent) => {
-                    // 基准角 + 手势角（用累加会对不上手指，这是之前文字拖动踩过的坑）
-                    let next: number = this.stickerBaseAngle + e.angle;
-                    // 归一化到 (-180, 180]，避免角度无限增大
-                    while (next > 180) {
-                      next -= 360;
-                    }
-                    while (next <= -180) {
-                      next += 360;
-                    }
-                    s.angle = next;
-                    this.refreshStickers();
-                  })
-              )
-
-              // 选中态控件（兄弟节点）：大小 + 旋转，精确可控且不影响本体位置
-              if (this.selectedSticker === idx) {
-                Column({ space: 2 }) {
-                  Row({ space: 4 }) {
-                    Text('□').fontSize(10).fontColor('#999999')
-                    Slider({ value: s.scale, min: 0.4, max: 5, step: 0.1, style: SliderStyle.OutSet })
-                      .layoutWeight(1)
-                      .blockColor('#FF6B6B')
-                      .selectedColor('#FF6B6B')
-                      .trackColor('#E0E0E0')
-                      .onChange((val: number) => {
-                        s.scale = val;
-                        this.refreshStickers();
-                      })
-                    Text('□').fontSize(18).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
-                  }
-                  Row({ space: 4 }) {
-                    Text('⟳').fontSize(12).fontColor('#999999')
-                    Slider({ value: s.angle, min: -180, max: 180, step: 1, style: SliderStyle.OutSet })
-                      .layoutWeight(1)
-                      .blockColor('#FF6B6B')
-                      .selectedColor('#FF6B6B')
-                      .trackColor('#E0E0E0')
-                      .onChange((val: number) => {
-                        s.angle = val;
-                        this.refreshStickers();
-                      })
-                    Text('⟳').fontSize(16).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
-                  }
-                }
-                .width(170)
-                .translate({ x: s.x, y: s.y + this.sliderOffsetFor(130, s.scale) })
-              }
+              this.stickerLayer(s, idx)
             }, (s: StickerItem, idx: number) => idx.toString())
             }
 
