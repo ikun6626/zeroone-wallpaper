@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-09-12 阶段 1：统一画布几何层（common/canvas）
+
+> 起因：预览、编辑、导出各写一套坐标，导致"预览一种构图、存下来另一种"，且文字/贴纸位置换设备就漂移。
+> 本阶段只落地**纯几何地基**（不改动现有页面行为），后续裁剪重写、预览铺满、双导出模式都复用同一套函数。
+
+| 项 | 内容 |
+|---|---|
+| 新增 | `common/canvas/ViewTransform.ets`：`ViewTransform`（归一化 scale/offsetX/offsetY + 90° 步进旋转 + 镜像）与 `ViewMath`（cover 基准、绘制矩形、`sourceRect` 画布↔原图区域映射、平移夹紧、vp→px 拖拽、捏合缩放、导出长边护栏）、`LayerMath`（文字/贴纸的归一化坐标与尺寸换算）。**刻意不 import 任何 `@kit.*`**，因此可被单元测试直接引用。 |
+| 新增 | `common/canvas/CanvasSpec.ets`：画布尺寸取自设备屏幕**物理像素**（`display.getDefaultDisplaySync()`），拿不到时回退 1080×1920；提供 `density()` 做 vp↔px 换算、`MAX_LONG_EDGE=4096` 做导出内存护栏，并预留 `OutputMode`（CANVAS / NATIVE / ORIGINAL）三种导出语义。 |
+| 新增 | `entry/src/test/CanvasGeometry.test.ets`：12 个用例覆盖 cover 基准、绘制矩形铺满、`sourceRect` 与缩放关系、平移夹紧、无富余方向不可拖、vp→px 换算、捏合上下限、90° 旋转换宽高、图层坐标跨机型等比、长边护栏。已在 `List.test.ets` 注册。 |
+| 验证 | `hvigor … test` 全绿（覆盖报告见 `entry/.test/default/outputs/test/reports/`）；`clean` 后全量 `assembleHap` 通过。 |
+| 踩坑记录 | ArkTS **不允许同名方法的多个实现**（哪怕参数个数不同）：`ViewMath.clamp(...)` 与数值版 `clamp(v,lo,hi)` 冲突报 `Duplicate function implementation`，数值版改名 `clampValue`。另外 **hvigor 增量编译会漏编新增文件**：新增源文件后必须 `clean` 一次或用 `test` 任务验证，否则 `assembleHap` 可能"通过"却根本没编到新代码。 |
+
+---
+
 ## 2026-09-12 工程清理（git 基线 + 死代码删除 + 权限瘦身）
 
 | 项 | 内容 |

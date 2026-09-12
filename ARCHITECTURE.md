@@ -110,6 +110,7 @@ flowchart TB
 | **收藏广播** | `common/utils/PreferenceUtil.ets` | 四个 Tab 各自读本地存储 → 跨 Tab 不同步 | 页面用 `@StorageProp('favoriteIds')` 订阅；写入只调 `toggleFavorite()`，不要自己赋值 |
 | **版本号** | `common/utils/AppInfo.ets` | 硬编码版本号必然忘记同步，审核判"信息与实际不符" | 用 `AppInfo.version()` / `versionFull()` |
 | **离屏合成导出** | `common/editor/ImageComposer.ets` | 截屏导出会带灰边、丢原分辨率 | 改导出参数时**必须同步核对预览侧**（字重 Bold、字号用 vp、阴影固定 vp、贴纸角度） |
+| **画布与变换** | `common/canvas/CanvasSpec.ets`、`common/canvas/ViewTransform.ets` | 预览/编辑/导出各写一套坐标 → 构图对不上、换设备位置漂移 | 画布尺寸取自设备屏幕像素（px），布局用 vp 时用 `CanvasSpec.density()` 换算；底图变换用归一化 `scale/offsetX/offsetY + quarterTurns`；**导出与预览都从 `ViewMath.sourceRect()` 取区域**；文字/贴纸位置一律存 `LayerMath` 的 0~1 归一化坐标。该目录为纯函数，改动后跑 `hvigor … test`（`entry/src/test/CanvasGeometry.test.ets`） |
 
 ## 三、关键数据流
 
@@ -164,6 +165,7 @@ ImageEditor.exportAndSave → ImageComposer.composeToJpeg(base, texts, stickers,
 | **CloudDBUtil** | 云数据库查询/分页/按分类查询/播种 | 已实现 |
 | **PreferenceUtil** | 收藏持久化 + favoriteIds 广播 + 通用字符串 KV | 已实现 |
 | **common/editor** | 编辑器内核：滤镜线程池、几何换算、离屏合成 | 已实现 |
+| **common/canvas** | 画布规格（设备像素）+ 底图变换 + 归一化图层坐标，纯函数并带单元测试 | 新增 |
 
 ## 五、一句话看懂
 
