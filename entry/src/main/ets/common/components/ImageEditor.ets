@@ -895,6 +895,117 @@ export struct ImageEditor {
       .hitTestBehavior(HitTestMode.None)
   }
 
+  /**
+   * 文字图层渲染（阶段 5 第 3a 步：从 build() 里**原样搬出来**的 @Builder）
+   *
+   * 只搬家，逻辑与视觉一行未改。搬出来之后 build() 只剩"编排"，
+   * 下一步 3c 会把它连同贴纸层一起搬进 CanvasView 组件。
+   */
+  @Builder
+  textLayer(t: TextItem, idx: number) {
+    // 外层 Column：文字内容在上，选中态的缩放滑块在下，整体随 translate 移动
+    Column({ space: 4 }) {
+      Stack() {
+        Text(t.content)
+          // 显式用 vp：fontSize 传数字时默认单位是 fp（会跟随系统字体大小设置缩放），
+          // 而导出按 vp→像素换算。用户把系统字体调大后，
+          // 预览会变大、导出却不变 —— 这就是"所见非所得"。写死 vp 后两侧一致。
+          .fontSize(`${22 * t.scale}vp`)
+          .fontColor(t.color)
+          .fontWeight(FontWeight.Bold)
+          .textShadow(this.textShadowFor(t))
+          .textAlign(TextAlign.Center)
+          .constraintSize({ minWidth: 44, maxWidth: this.previewW - 48 })
+        if (this.selectedText === idx) {
+          Text('✕')
+            .fontSize(14)
+            .fontColor(Color.White)
+            .width(22)
+            .height(22)
+            .textAlign(TextAlign.Center)
+            .backgroundColor('#FF6B6B')
+            .borderRadius(11)
+            .offset({ x: 8, y: -8 })
+            .onClick(() => {
+              this.removeText(idx);
+            })
+        }
+      }
+      .alignContent(Alignment.TopEnd)
+      // 选中态加虚线边框，提示可操作区域；未选中无视觉干扰
+      .border(this.selectedText === idx ? { width: 1, color: '#FF6B6B', style: BorderStyle.Dashed } : { width: 0 })
+      .padding({ left: 6, right: 6, top: 4, bottom: 4 })
+    }
+    // Block：强制拦截触摸，全透明背景不再穿透到下层 Image
+    .hitTestBehavior(HitTestMode.Block)
+    .backgroundColor(Color.Transparent)
+    .padding({ left: 18, right: 18, top: 12, bottom: 12 })
+    // 拖动中叠加实时位移：只改标量，ForEach 不会重建整个列表
+    .translate({
+      x: t.x + (this.textDragIdx === idx ? this.textDragDx : 0),
+      y: t.y + (this.textDragIdx === idx ? this.textDragDy : 0)
+    })
+    .gesture(
+      PanGesture()
+        .onActionStart(() => {
+          this.selectedText = idx;
+          this.textBaseX = t.x;
+          this.textBaseY = t.y;
+          this.textDragIdx = idx;
+          this.textDragDx = 0;
+          this.textDragDy = 0;
+        })
+        .onActionUpdate((e: GestureEvent) => {
+          const limitX: number = this.previewW / 2 + 60;
+          const limitY: number = this.previewH / 2 + 60;
+          // 拖动中只更新实时增量：此前是"改 t.x/t.y → refreshTexts()"，
+          // 而 refreshTexts 会换掉数组引用，于是每一帧都重建全部文字节点。
+          this.textDragDx = Math.max(-limitX - this.textBaseX,
+            Math.min(limitX - this.textBaseX, e.offsetX));
+          this.textDragDy = Math.max(-limitY - this.textBaseY,
+            Math.min(limitY - this.textBaseY, e.offsetY));
+        })
+        .onActionEnd(() => {
+          // 松手才提交一次，并复位实时位移
+          t.x = this.textBaseX + this.textDragDx;
+          t.y = this.textBaseY + this.textDragDy;
+          this.textDragIdx = -1;
+          this.textDragDx = 0;
+          this.textDragDy = 0;
+          this.refreshTexts();
+        })
+    )
+    .parallelGesture(
+      PinchGesture()
+        .onActionStart(() => {
+          this.textBaseScale = t.scale;
+        })
+        .onActionUpdate((e: GestureEvent) => {
+          t.scale = Math.max(0.5, Math.min(4, this.textBaseScale * e.scale));
+          this.refreshTexts();
+        })
+    )
+
+    // 选中态滑杆：与文字本体同级的兄弟节点 → 只影响自身，不会挪动本体
+    if (this.selectedText === idx) {
+      Row({ space: 4 }) {
+        Text('A').fontSize(10).fontColor('#999999')
+        Slider({ value: t.scale, min: 0.5, max: 4, step: 0.1, style: SliderStyle.OutSet })
+          .layoutWeight(1)
+          .blockColor('#FF6B6B')
+          .selectedColor('#FF6B6B')
+          .trackColor('#E0E0E0')
+          .onChange((val: number) => {
+            t.scale = val;
+            this.refreshTexts();
+          })
+        Text('A').fontSize(18).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
+      }
+      .width(150)
+      .translate({ x: t.x, y: t.y + this.sliderOffsetFor(22, t.scale) })
+    }
+  }
+
   build() {
     Stack() {
       if (this.loading) {
@@ -1192,114 +1303,9 @@ export struct ImageEditor {
 
             // 裁剪态下隐藏文字/贴纸：它们不参与裁剪，且会浮在选区上方抢走拖动手势
             if (!(this.tool === 'crop' && this.cropVisible)) {
-            // 文字叠加（多行 + 风格）
+            // 文字叠加（多行 + 风格）—— 渲染内容已搬到 @Builder textLayer()（阶段 5 第 3a 步）
             ForEach(this.texts, (t: TextItem, idx: number) => {
-              // 外层 Column：文字内容在上，选中态的缩放滑块在下，整体随 translate 移动
-              Column({ space: 4 }) {
-                Stack() {
-                  Text(t.content)
-                    // 显式用 vp：fontSize 传数字时默认单位是 fp（会跟随系统字体大小设置缩放），
-                    // 而导出按 vp→像素换算。用户把系统字体调大后，
-                    // 预览会变大、导出却不变 —— 这就是"所见非所得"。写死 vp 后两侧一致。
-                    .fontSize(`${22 * t.scale}vp`)
-                    .fontColor(t.color)
-                    .fontWeight(FontWeight.Bold)
-                    .textShadow(this.textShadowFor(t))
-                    .textAlign(TextAlign.Center)
-                    .constraintSize({ minWidth: 44, maxWidth: this.previewW - 48 })
-                  if (this.selectedText === idx) {
-                  Text('✕')
-                    .fontSize(14)
-                    .fontColor(Color.White)
-                    .width(22)
-                    .height(22)
-                    .textAlign(TextAlign.Center)
-                    .backgroundColor('#FF6B6B')
-                    .borderRadius(11)
-                    .offset({ x: 8, y: -8 })
-                    .onClick(() => {
-                      this.removeText(idx);
-                    })
-                }
-              }
-              .alignContent(Alignment.TopEnd)
-              // 选中态加虚线边框，提示可操作区域；未选中无视觉干扰
-              .border(this.selectedText === idx ? { width: 1, color: '#FF6B6B', style: BorderStyle.Dashed } : { width: 0 })
-                .padding({ left: 6, right: 6, top: 4, bottom: 4 })
-
-                // 选中态内嵌缩放条：就近操作，无需切到底部面板
-                // 注意：它作为**兄弟节点**渲染（见下方），不放进这个 Column，
-                // 否则会把本体撑高并往上顶 —— 选中时位置就和导出位置对不上了。
-
-              }
-              // Block：强制拦截触摸，全透明背景不再穿透到下层 Image
-              .hitTestBehavior(HitTestMode.Block)
-              .backgroundColor(Color.Transparent)
-              .padding({ left: 18, right: 18, top: 12, bottom: 12 })
-              // 拖动中叠加实时位移：只改标量，ForEach 不会重建整个列表
-              .translate({
-                x: t.x + (this.textDragIdx === idx ? this.textDragDx : 0),
-                y: t.y + (this.textDragIdx === idx ? this.textDragDy : 0)
-              })
-              .gesture(
-                PanGesture()
-                  .onActionStart(() => {
-                    this.selectedText = idx;
-                    this.textBaseX = t.x;
-                    this.textBaseY = t.y;
-                    this.textDragIdx = idx;
-                    this.textDragDx = 0;
-                    this.textDragDy = 0;
-                  })
-                  .onActionUpdate((e: GestureEvent) => {
-                    const limitX: number = this.previewW / 2 + 60;
-                    const limitY: number = this.previewH / 2 + 60;
-                    // 此前这里是"改 t.x/t.y → refreshTexts()"，而 refreshTexts 会换掉数组引用，
-                    // 于是每一帧都重建全部文字节点 —— 这就是拖动黏、不跟手的原因。
-                    this.textDragDx = Math.max(-limitX - this.textBaseX,
-                      Math.min(limitX - this.textBaseX, e.offsetX));
-                    this.textDragDy = Math.max(-limitY - this.textBaseY,
-                      Math.min(limitY - this.textBaseY, e.offsetY));
-                  })
-                  .onActionEnd(() => {
-                    // 松手才提交一次，并复位实时位移
-                    t.x = this.textBaseX + this.textDragDx;
-                    t.y = this.textBaseY + this.textDragDy;
-                    this.textDragIdx = -1;
-                    this.textDragDx = 0;
-                    this.textDragDy = 0;
-                    this.refreshTexts();
-                  })
-              )
-              .parallelGesture(
-                PinchGesture()
-                  .onActionStart(() => {
-                    this.textBaseScale = t.scale;
-                  })
-                  .onActionUpdate((e: GestureEvent) => {
-                    t.scale = Math.max(0.5, Math.min(4, this.textBaseScale * e.scale));
-                    this.refreshTexts();
-                  })
-              )
-
-              // 选中态滑杆：与文字本体同级的兄弟节点 → 只影响自身，不会挪动本体
-              if (this.selectedText === idx) {
-                Row({ space: 4 }) {
-                  Text('A').fontSize(10).fontColor('#999999')
-                  Slider({ value: t.scale, min: 0.5, max: 4, step: 0.1, style: SliderStyle.OutSet })
-                    .layoutWeight(1)
-                    .blockColor('#FF6B6B')
-                    .selectedColor('#FF6B6B')
-                    .trackColor('#E0E0E0')
-                    .onChange((val: number) => {
-                      t.scale = val;
-                      this.refreshTexts();
-                    })
-                  Text('A').fontSize(18).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
-                }
-                .width(150)
-                .translate({ x: t.x, y: t.y + this.sliderOffsetFor(22, t.scale) })
-              }
+              this.textLayer(t, idx)
             }, (t: TextItem, idx: number) => idx.toString())
 
             // ===== 贴纸层（抠图/相册 PNG，可拖拽缩放旋转） =====
