@@ -40,11 +40,11 @@ entry/src/main/ets/
 │   ├── StickerStudioPage.ets            # 贴纸工作台（选背景 → 合成 → 存图/锁屏图/桌面图）
 │   ├── StickerBoardPage.ets             # 多贴纸画板
 │   └── MinePage.ets                     # 商城介绍 + 收藏 + 帮助反馈 + 法律与关于
-└── DEPRECATED.md                        # 已隔离的无调用方文件清单（改代码前先看这里）
 ```
 
-> `common/photoeditor/*`、`pages/PhotoEditorPage.ets`、`common/sticker/*`、`common/components/StickerCanvasComponent.ets`
-> 属于**历史遗留、无任何调用方**，已加弃用横幅，清单见 `entry/src/main/ets/DEPRECATED.md`。
+> 历史上存在 7 个无调用方的文件（`StickerCanvasComponent`、`StickerProcessor`、`WallpaperExporter`、
+> `PhotoEditorPage` 与 `common/photoeditor/` 三件套）以及记录它们的 `DEPRECATED.md`，
+> 已于 2026-09-12 全部删除；工程已纳入 git，回滚靠版本历史而不是留档文件。
 
 ## 二、华为 AGC 控制台配置（一次性，约 10~15 分钟）
 
@@ -156,4 +156,4 @@ $env:DEVECO_SDK_HOME = 'E:\DevEco Studio\sdk'
 - **内置壁纸为占位图**（picsum + 自有宠物图）：替换 `resources/base/media/` 下的图片与 `DefaultWallpapers.ets` 即可。
 - **`ratingSum/ratingCount` 字段保留但 UI 未使用**：评分系统已按需求移除；字段保留是为了与云端 schema 一致（缓存 DTO 也会往返这两个字段，避免回写云端时被清零）。
 - **缩略图**：客户端暂用原图 URL 充当缩略图；若后续图库变大，可用云函数生成缩略图。
-- **历史遗留文件**：7 个无调用方文件已隔离并加了弃用横幅（项目无 git，删除不可恢复，故未直接删）。确认不需要后可一次性删除，详见 `DEPRECATED.md`。
+- **历史遗留文件已清理**：7 个无调用方文件与 `DEPRECATED.md` 已于 2026-09-12 删除，工程已纳入 git 版本控制。

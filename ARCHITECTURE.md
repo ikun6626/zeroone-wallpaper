@@ -1,7 +1,7 @@
 # ZeroOne 壁纸应用 · 项目架构
 
 > 适用读者：不熟悉本项目的人也能看懂模块关系。
-> 最后同步：2026-09-12（与代码实际状态一致；历史遗留文件见 `entry/src/main/ets/DEPRECATED.md`）。
+> 最后同步：2026-09-12（与代码实际状态一致；7 个无调用方的历史文件已于同日删除，见 `CHANGELOG.md`）。
 
 ## 一、整体结构
 
@@ -12,7 +12,6 @@ flowchart TB
     classDef data    fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
     classDef mech    fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px,color:#4a148c
     classDef cloud   fill:#eceff1,stroke:#546e7a,color:#263238
-    classDef dead    fill:#fafafa,stroke:#bdbdbd,stroke-dasharray:6 4,color:#757575
 
     subgraph ENTRY["entry 模块（唯一模块）"]
         ability["EntryAbility 应用入口"]
@@ -52,9 +51,6 @@ flowchart TB
             geom["CropGeometry / LayerGeometry — 纯几何换算"]
         end
 
-        subgraph DEAD["已隔离（无调用方）"]
-            old["PhotoEditorPage / photoeditor/* / StickerProcessor / WallpaperExporter / StickerCanvasComponent"]
-        end
     end
 
     subgraph AGC["华为 AGC"]
@@ -99,7 +95,6 @@ flowchart TB
     class store,prefs,clouddb data
     class pixel,guard,appinfo,composer,filtertask,geom mech
     class cdb cloud
-    class old dead
 ```
 
 ## 二、横切机制（改代码前必读）
@@ -169,7 +164,6 @@ ImageEditor.exportAndSave → ImageComposer.composeToJpeg(base, texts, stickers,
 | **CloudDBUtil** | 云数据库查询/分页/按分类查询/播种 | 已实现 |
 | **PreferenceUtil** | 收藏持久化 + favoriteIds 广播 + 通用字符串 KV | 已实现 |
 | **common/editor** | 编辑器内核：滤镜线程池、几何换算、离屏合成 | 已实现 |
-| **DEPRECATED 清单** | 无调用方的历史文件（见 `ets/DEPRECATED.md`） | 已隔离 |
 
 ## 五、一句话看懂
 
