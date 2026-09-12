@@ -1049,7 +1049,8 @@ export struct ImageEditor {
             if (this.tool === 'transform') {
               Row({ space: 10 }) {
                 this.opButton('↺ 左转', () => {
-                  this.rotateImage(-90);
+                  // 逆时针 90°：写 270 而不是 -90（官方文档只写"角度"，没约定负角语义）
+                  this.rotateImage(270);
                 })
                 this.opButton('↻ 右转', () => {
                   this.rotateImage(90);
@@ -1100,7 +1101,8 @@ export struct ImageEditor {
                 // 旋转/镜像操作行（苹果照片式：在裁剪界面内操作）
                 Row({ space: 10 }) {
                   this.opButton('↺ 左转', () => {
-                    this.rotateImage(-90);
+                    // 同 transform 面板：逆时针 90° 用 270 表达
+                    this.rotateImage(270);
                   })
                   this.opButton('↻ 右转', () => {
                     this.rotateImage(90);
