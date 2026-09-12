@@ -158,7 +158,7 @@ ImageEditor.exportAndSave → ImageComposer.composeToJpeg(base, texts, stickers,
 | **StickerStudioPage** | 选背景 → 贴纸自由摆放/缩放/旋转 → 存 JPG/透明 PNG/锁屏图/桌面图 | 已实现 |
 | **StickerBoardPage** | 多贴纸画板：自定义背景 + 多贴纸 + 保存 | 已实现 |
 | **MinePage** | 商城介绍、统计、最爱收藏、帮助与反馈、法律与关于 | 已实现 |
-| **ImagePreview** | 全屏预览：缩放/双击/滑动关闭、锁屏桌面模拟、保存、设为锁屏/桌面、进编辑器 | 已实现 |
+| **ImagePreview** | 全屏预览：Cover 铺满屏幕（= 壁纸效果）、缩放/双击/滑动关闭、锁屏桌面模拟、保存（铺满屏幕 / 原图比例两种比例）、设为锁屏/桌面、进编辑器 | 已实现 |
 | **ImageEditor** | 旋转/翻转/裁剪（8 把手 + 6 比例）/20 滤镜/5 纹理/艺术字/贴纸（可旋转）/导出 | 已实现 |
 | **LegalDocPage** | 隐私政策、用户协议、关于与版权、清除缓存 | 已实现 |
 | **WallpaperStore** | 唯一数据源：缓存优先、分页、并发去重、失败可重试 | 已实现 |

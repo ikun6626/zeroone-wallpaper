@@ -24,6 +24,7 @@
 import { image } from '@kit.ImageKit';
 import { TextItem, StickerItem, DispRect } from './EditorModels';
 import { toAnchor, LayerPoint } from './LayerGeometry';
+import { ViewTransform, ViewMath, Rect } from '../canvas/ViewTransform';
 
 /** UI 端文字基准字号（fontSize = TEXT_BASE_FONT * scale，单位 vp） */
 const TEXT_BASE_FONT: number = 22;
@@ -281,6 +282,43 @@ export async function composeToJpeg(base: image.PixelMap, baseW: number, baseH: 
       quality: quality
     });
     return buf;
+  } finally {
+    outPm.release();
+    packer.release();
+  }
+}
+
+/**
+ * 按画布（= 目标设备屏幕像素）合成导出 —— "铺满屏幕"保存的唯一出处
+ *
+ * 与 `composeToJpeg` 的区别：画布尺寸不再等于底图尺寸，而是手机屏幕尺寸；
+ * 底图按 cover + 用户的缩放/平移铺满画布，**画布内看到的就是用户看到的**，
+ * 因此存出来的图天然是手机屏幕比例，设成壁纸也不会被系统二次裁切。
+ *
+ * 与预览共用同一套几何（`ViewMath.drawRect`），不会再出现"预览一种构图、存下来另一种"。
+ *
+ * @param base     底图像素
+ * @param baseW    底图宽
+ * @param baseH    底图高
+ * @param canvasW  画布宽（px，来自 CanvasSpec）
+ * @param canvasH  画布高（px）
+ * @param t        归一化变换（缩放 + 归一化平移；预览侧由 vp 位移换算而来）
+ * @param quality  JPEG 质量 1~100
+ */
+export async function composeCoverToJpeg(base: image.PixelMap, baseW: number, baseH: number,
+  canvasW: number, canvasH: number, t: ViewTransform, quality: number): Promise<ArrayBuffer> {
+  const canvas: OffscreenCanvas = new OffscreenCanvas(canvasW, canvasH);
+  const settings: RenderingContextSettings = new RenderingContextSettings(true);
+  const ctx: OffscreenCanvasRenderingContext2D = canvas.getContext('2d', settings);
+
+  // 底图按 cover + 缩放/平移铺满画布（超出部分自然被画布裁掉 = 用户看到的取景）
+  const d: Rect = ViewMath.drawRect(baseW, baseH, canvasW, canvasH, t);
+  ctx.drawImage(base, d.x, d.y, d.width, d.height);
+
+  const outPm: image.PixelMap = ctx.getPixelMap(0, 0, canvasW, canvasH);
+  const packer: image.ImagePacker = image.createImagePacker();
+  try {
+    return await packer.packing(outPm, { format: 'image/jpeg', quality: quality });
   } finally {
     outPm.release();
     packer.release();
