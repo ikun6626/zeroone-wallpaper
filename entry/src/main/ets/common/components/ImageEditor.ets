@@ -686,6 +686,38 @@ export struct ImageEditor {
     this.pushSticker(path);
   }
 
+  /**
+   * 把相册选中的图片复制进沙盒再当贴纸用
+   *
+   * 为什么必须复制：PhotoViewPicker 返回的是 `file://media/...` URI，读取授权是**临时**的，
+   * 一旦授权失效，Image 加载不到内容，节点在真机上退化成一块透明区域——表现就是
+   * "导入的贴纸完全拖不动、也缩放不了"，而内置贴纸因为本来就是沙盒文件所以不受影响。
+   * 复制进沙盒后两者走完全同一条路径，顺带解决"重启后贴纸变空白"。
+   * 复制失败时回退原 URI，不阻塞用户操作。
+   */
+  private copyStickerIntoFiles(uri: string): string {
+    try {
+      const ctx: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+      const dir: string = `${ctx.filesDir}/stickers`;
+      try {
+        fileIo.mkdirSync(dir, true);
+      } catch (e) {
+        // 目录已存在（或创建失败）时继续，后续 openSync 会给出真实结果
+      }
+      const dest: string = `${dir}/imported_${Date.now()}.png`;
+      const out = fileIo.openSync(dest, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
+      try {
+        fileIo.copyFileSync(uri, out.fd);
+      } finally {
+        fileIo.closeSync(out);
+      }
+      return `file://${dest}`;
+    } catch (e) {
+      console.error(`copyStickerIntoFiles failed, fallback to uri: ${JSON.stringify(e)}`);
+      return uri;
+    }
+  }
+
   /** 从相册选择 PNG/图片贴纸添加到画布（PhotoViewPicker 无需权限） */
   async pickStickerFromAlbum(): Promise<void> {
     try {
@@ -695,7 +727,8 @@ export struct ImageEditor {
         maxSelectNumber: 1
       });
       if (res.photoUris !== undefined && res.photoUris.length > 0) {
-        this.addPngSticker(res.photoUris[0]);
+        // 先落盘到沙盒再当贴纸：相册 URI 的授权是临时的，直接用会导致贴纸拖不动/缩放不了
+        this.addPngSticker(this.copyStickerIntoFiles(res.photoUris[0]));
       }
     } catch (e) {
       console.error(`pickStickerFromAlbum failed: ${JSON.stringify(e)}`);
