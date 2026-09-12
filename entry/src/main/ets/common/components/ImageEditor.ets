@@ -92,6 +92,13 @@ export struct ImageEditor {
   /** 文字列表 */
   @State texts: TextItem[] = [];
   @State selectedText: number = -1;
+  /**
+   * 文字拖动中的实时位移（不写回数组，避免每帧重建整个图层列表）
+   * 拖动中只改这三个标量，松手时才把最终值提交进 texts 并刷新一次。
+   */
+  @State textDragIdx: number = -1;
+  @State textDragDx: number = 0;
+  @State textDragDy: number = 0;
   @State showTextInput: boolean = false;
   @State textInput: string = '';
   @State textColor: string = '#FFFFFF';
@@ -1229,21 +1236,38 @@ export struct ImageEditor {
               .hitTestBehavior(HitTestMode.Block)
               .backgroundColor(Color.Transparent)
               .padding({ left: 18, right: 18, top: 12, bottom: 12 })
-              .translate({ x: t.x, y: t.y })
+              // 拖动中叠加实时位移：只改标量，ForEach 不会重建整个列表
+              .translate({
+                x: t.x + (this.textDragIdx === idx ? this.textDragDx : 0),
+                y: t.y + (this.textDragIdx === idx ? this.textDragDy : 0)
+              })
               .gesture(
                 PanGesture()
                   .onActionStart(() => {
                     this.selectedText = idx;
                     this.textBaseX = t.x;
                     this.textBaseY = t.y;
+                    this.textDragIdx = idx;
+                    this.textDragDx = 0;
+                    this.textDragDy = 0;
                   })
                   .onActionUpdate((e: GestureEvent) => {
-                    const nx: number = this.textBaseX + e.offsetX;
-                    const ny: number = this.textBaseY + e.offsetY;
                     const limitX: number = this.previewW / 2 + 60;
                     const limitY: number = this.previewH / 2 + 60;
-                    t.x = Math.max(-limitX, Math.min(limitX, nx));
-                    t.y = Math.max(-limitY, Math.min(limitY, ny));
+                    // 此前这里是"改 t.x/t.y → refreshTexts()"，而 refreshTexts 会换掉数组引用，
+                    // 于是每一帧都重建全部文字节点 —— 这就是拖动黏、不跟手的原因。
+                    this.textDragDx = Math.max(-limitX - this.textBaseX,
+                      Math.min(limitX - this.textBaseX, e.offsetX));
+                    this.textDragDy = Math.max(-limitY - this.textBaseY,
+                      Math.min(limitY - this.textBaseY, e.offsetY));
+                  })
+                  .onActionEnd(() => {
+                    // 松手才提交一次，并复位实时位移
+                    t.x = this.textBaseX + this.textDragDx;
+                    t.y = this.textBaseY + this.textDragDy;
+                    this.textDragIdx = -1;
+                    this.textDragDx = 0;
+                    this.textDragDy = 0;
                     this.refreshTexts();
                   })
               )
