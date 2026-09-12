@@ -87,11 +87,19 @@ export async function showSetWallpaperDialog(kind: number): Promise<void> {
 export struct SetWallpaperGuidePanel {
   /** 目标：WallpaperKind.LOCK / WallpaperKind.HOME */
   @Prop kind: number = 0;
+  /**
+   * 卡片里当前选中的目标（默认取 kind，可在卡片内切换）
+   *
+   * 为什么要在卡片里切换：写相册必须走 SaveButton 的临时授权，
+   * 点按钮前再问"锁屏还是桌面"容易超时；保存后在同一张卡片里选是 Cuto 的做法。
+   */
+  @State activeKind: number = 0;
   onClose: () => void = () => {};
   /** 返回键处理在 EditGuard 中的注册 id（-1 = 未注册） */
   private backId: number = -1;
 
   aboutToAppear(): void {
+    this.activeKind = this.kind;
     // 引导卡片叠在预览之上：返回键应先关卡片，而不是把预览一起关掉
     this.backId = EditGuard.push((): boolean => {
       this.onClose();
@@ -104,6 +112,20 @@ export struct SetWallpaperGuidePanel {
       EditGuard.pop(this.backId);
       this.backId = -1;
     }
+  }
+
+  /** 目标选择胶囊：锁屏 / 桌面（选中态用与预览页一致的金色） */
+  @Builder
+  kindChip(label: string, kind: number) {
+    Text(label)
+      .fontSize(13)
+      .fontColor(this.activeKind === kind ? '#111114' : '#C9C9D1')
+      .backgroundColor(this.activeKind === kind ? '#E6C07E' : '#26272E')
+      .padding({ left: 18, right: 18, top: 7, bottom: 7 })
+      .borderRadius(16)
+      .onClick(() => {
+        this.activeKind = kind;
+      })
   }
 
   build() {
@@ -139,13 +161,20 @@ export struct SetWallpaperGuidePanel {
         }
         .width('100%')
 
-        Text(`设为${wallpaperKindName(this.kind)}壁纸`)
+        Text(`设为${wallpaperKindName(this.activeKind)}壁纸`)
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .fontColor('#F2F2F5')
           .width('100%')
 
-        Text(setWallpaperSteps(this.kind))
+        // 锁屏 / 桌面切换：保存后的目标在这里选（Cuto 同款交互）
+        Row({ space: 10 }) {
+          this.kindChip('锁屏', WallpaperKind.LOCK)
+          this.kindChip('桌面', WallpaperKind.HOME)
+        }
+        .width('100%')
+
+        Text(setWallpaperSteps(this.activeKind))
           .fontSize(13)
           .fontColor('#9A9AA5')
           .lineHeight(22)
@@ -159,7 +188,7 @@ export struct SetWallpaperGuidePanel {
             .height(40)
             .layoutWeight(1)
             .onClick(() => {
-              copySetWallpaperSteps(this.kind);
+              copySetWallpaperSteps(this.activeKind);
             })
           Button('我知道了')
             .fontSize(13)

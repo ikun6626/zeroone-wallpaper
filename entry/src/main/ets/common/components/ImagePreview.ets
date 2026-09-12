@@ -27,7 +27,7 @@ const DISMISS_THRESHOLD: number = 120;
  *
  * 特性：
  *  - 纯黑背景 + 图片**铺满屏幕**（cover，与 Cuto 一致）：所见即壁纸实际效果
- *  - 左上圆形返回箭头；底部「设为锁屏/设为桌面」主 CTA + 半透明胶囊工具栏
+ *  - 左上圆形返回箭头；底部 Cuto 式操作区：磨砂胶囊（收藏/预览模式/编辑）+ 一个主 CTA
  *  - 保存成功后弹出图库设置引导（三方应用无法直接换壁纸，见 SetWallpaperGuide）
  *  - 单击图片：工具栏/返回箭头在显示 ↔ 隐藏之间切换（沉浸式看图）
  *  - 双指捏合缩放；双击放大/还原；放大后单指拖动浏览
@@ -161,16 +161,6 @@ export struct ImagePreview {
     }
   }
 
-  /** 当前时间 HH:mm（状态栏用） */
-  private currentTimeStr(): string {
-    // 读取 nowTick 建立渲染依赖：分钟变化时定时器驱动重绘
-    if (this.nowTick < 0) { return ''; }
-    const d = new Date();
-    const h = d.getHours().toString().padStart(2, '0');
-    const m = d.getMinutes().toString().padStart(2, '0');
-    return `${h}:${m}`;
-  }
-
   /** 当前时间 H:mm（锁屏大号用） */
   private currentTimeShort(): string {
     // 读取 nowTick 建立渲染依赖：分钟变化时定时器驱动重绘
@@ -217,9 +207,11 @@ export struct ImagePreview {
   }
 
   /**
-   * 主 CTA 按钮：设为锁屏 / 设为桌面
+   * 主 CTA：设为壁纸（保存铺满图 → 步骤卡片里再选锁屏/桌面）
    * 说明：写系统相册必须有 SaveButton 的临时授权，普通 Text/Button 点击
    * 没有授权，createAsset 会直接抛权限错误，因此这里必须是安全控件。
+   * 也因此不能自己画一个"设为壁纸"胶囊：SaveButton 的外观由系统决定，
+   * 只能用它的胶囊图标 + 下方一行自己的说明文字（Cuto 的保存按钮同理）。
    */
   @Builder
   setWallpaperButton(label: string, kind: number) {
@@ -269,9 +261,8 @@ export struct ImagePreview {
   }
 
   /**
-   * 保存到系统相册
-   * @param guideKind 传入 WallpaperKind.LOCK/HOME 时表示“设为壁纸”意图：
-   *                  保存成功后弹出设置引导；传 -1 表示单纯存图。
+   * 保存到系统相册（固定按"铺满屏幕"合成 = 壁纸成品），随后展示设置引导卡片
+   * @param guideKind 引导卡片默认展开的目标：WallpaperKind.LOCK / HOME（卡片里可切换）
    */
   async saveToAlbum(guideKind: number): Promise<void> {
     if (this.saving) return;
@@ -314,12 +305,9 @@ export struct ImagePreview {
       const file = fileIo.openSync(uri, fileIo.OpenMode.WRITE_ONLY);
       fileIo.copyFileSync(dest, file.fd);
       fileIo.closeSync(file);
-      if (guideKind >= 0) {
-        // 设为壁纸意图：保存成功后展示引导卡片（在 SaveButton 回调之外渲染）
-        this.guideKind = guideKind;
-      } else {
-        promptAction.showToast({ message: '已保存到相册 📷' });
-      }
+      // 保存成功后展示引导卡片（在 SaveButton 回调之外渲染）：
+      // 卡片里可以切"锁屏 / 桌面"，所以主 CTA 只需要一个（Cuto 同款流程）。
+      this.guideKind = guideKind;
     } catch (e) {
       console.error(`saveToAlbum failed: ${JSON.stringify(e)}`);
       promptAction.showToast({ message: '保存失败，请重试' });
@@ -439,15 +427,8 @@ export struct ImagePreview {
       // ===== 3. 桌面预览模拟层（EMUI / HarmonyOS 经典桌面风格） =====
       if (this.previewMode === 'home') {
         Column() {
-          // 状态栏：左 运营商信号 + 移动数据 | 右 电量 + 时间
-          Row() {
-            Text('📶 0.00K/s  4G').fontSize(12).fontColor(Color.White).fontWeight(FontWeight.Medium)
-            Blank()
-            Text('62%  🕑').fontSize(12).fontColor(Color.White)
-          }
-          .width('100%').height(28)
-          .padding({ left: 18, right: 18 }).alignItems(VerticalAlign.Center)
-
+          // 这里不再画"假状态栏"（信号/网速/电量）：真机顶部本来就有系统状态栏，
+          // 叠一份只会显得脏 —— 参考 Cuto，模拟层只留时钟/日期/图标这些壁纸内容本身。
           // 大号时间 + 右侧温度 + 日期
           Row() {
             Text(this.currentTimeShort())
@@ -536,15 +517,7 @@ export struct ImagePreview {
       // ===== 4. 锁屏预览模拟层（Cuto 风格：时间在上，居中） =====
       if (this.previewMode === 'lock') {
         Column() {
-          // HarmonyOS 状态栏
-          Row() {
-            Text(this.currentTimeStr()).fontSize(14).fontColor(Color.White).fontWeight(FontWeight.Medium)
-            Blank()
-            Text('📶 📡 🔋').fontSize(14).fontColor(Color.White)
-          }
-          .width('100%').height(30)
-          .padding({ left: 18, right: 18 }).alignItems(VerticalAlign.Center)
-
+          // 同桌面模拟层：不画假状态栏（真机顶部有系统状态栏），Cuto 的锁屏预览也只留时钟
           Blank()
 
           // 日期 + 大号时间（Cuto 风格：在上半部分居中）
@@ -580,19 +553,11 @@ export struct ImagePreview {
           .onClick(() => { this.onClose(); })
       }
 
-      // ===== 6. 底部操作区（设为壁纸主 CTA + 胶囊工具栏，仅 UI 可见时显示） =====
+      // ===== 6. 底部操作区（Cuto 式：一个磨砂胶囊放图标 + 一个主 CTA，仅 UI 可见时显示） =====
       if (this.uiVisible) {
         Column({ space: 12 }) {
-          // ① 主 CTA：设为锁屏 / 设为桌面
-          // 壁纸 App 的核心转化动作就是“把它变成我的壁纸”，
-          // 保存完就此结束会让用户以为“保存了=设置了”，所以这里必须有明确出口。
-          // 保存比例固定"铺满屏幕"，所以不再放"铺满/原图比例"胶囊（问题一）。
-          Row({ space: 12 }) {
-            this.setWallpaperButton('设为锁屏', WallpaperKind.LOCK)
-            this.setWallpaperButton('设为桌面', WallpaperKind.HOME)
-          }
-
-          // ② 胶囊工具栏
+          // ① 磨砂胶囊工具栏：收藏 / 预览模式（普通→桌面→锁屏）/ 编辑
+          //    存图的入口收敛到下面的主 CTA（它本身就是 SaveButton），不再摆第二个"保存"圆圈
           Row({ space: 28 }) {
             // 收藏
             Text(this.isFav ? '❤️' : '🤍')
@@ -614,15 +579,6 @@ export struct ImagePreview {
               else this.previewMode = 'normal';
             })
 
-            // 仅存图（SaveButton 安全控件）
-            SaveButton({ icon: SaveIconStyle.FULL_FILLED, buttonType: ButtonType.Circle })
-              .width(44).height(44)
-              .onClick((_: ClickEvent, result: SaveButtonOnClickResult) => {
-                if (result === SaveButtonOnClickResult.SUCCESS && !this.saving) {
-                  this.saveToAlbum(-1);
-                }
-              })
-
             // 编辑
             Text('✏️').fontSize(22)
               .onClick(() => { this.showEditor = true; })
@@ -630,6 +586,11 @@ export struct ImagePreview {
           .padding({ left: 20, right: 20, top: 10, bottom: 10 })
           .backgroundColor('#44000000')
           .borderRadius(28)
+
+          // ② 主 CTA：保存铺满图并给出设置步骤
+          //    为什么只有一个按钮：写系统相册必须走 SaveButton 的临时授权，
+          //    两个系统"保存"按钮叠在一起又丑又费解 —— 锁屏/桌面在步骤卡片里选（Cuto 同款）。
+          this.setWallpaperButton('设为壁纸', WallpaperKind.LOCK)
         }
         .position({ x: '50%', y: '100%' })
         .markAnchor({ x: '50%', y: '100%' })
