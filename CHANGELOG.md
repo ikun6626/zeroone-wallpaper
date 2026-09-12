@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-09-12 阶段 3：裁剪重写（所见即所裁）
+
+> 起因：实际运行反馈"自由模式左右拖不动、图片四角区域拖不动、裁剪完还是原图"。
+> 复核后是**三个独立缺陷**，而且都与"图片到底按什么尺寸适配"这条约定有关。
+
+| 缺陷 | 根因 | 修复 |
+|---|---|---|
+| 裁完还是原图 / 裁出来不是框住那块 | `applyCrop` 的逆变换漏了"绕预览中心缩放"这一项（原式 `u = (s − off − disp.x)/(s·k)`），只有"没缩放、没平移"时才碰巧正确 | 改为离屏重绘：`composeCropToPixelMap()` 用与 UI **同一套**变换（`cropDrawTransform`）把源图画进输出画布，画布原点对齐选区左上角 —— 框住什么就得到什么 |
+| 改选区时图片自己跳、四角区域对不上 | 裁剪视图把图片 fit 到了**选区**（`Stack{Image}.width(cropW).height(cropH)`），而所有换算都假设图片 fit 到**预览区**（`dispRect`） | 内层补一层"预览区尺寸"的坐标系容器，图片在其中按 Contain 适配，再整体平移 `(-cropX, -cropY)`，选区外用 `clip` 裁掉 —— 显示与换算从此同源 |
+| 左右边中点拖不动 | 四个边把手的可点区域就是那根 3vp 粗的白条，真机上几乎点不到 | 8 个把手全部加 `.responseRegion()`：角把手 44×44，边把手 31×66 / 66×31（热区可超出组件范围，视觉不变） |
+| 旋转滑块只预览不生效 | `cropAngle` 从未进入裁剪计算（历史上因坐标问题被摘掉） | 旋转并入 `cropDrawTransform`，真正参与裁剪；旋转后四角露出的底色铺黑 |
+| 图层锚点用 `mapCrop` 简单减偏移 | 只在无缩放、无旋转时正确 | 换成 `unprojectCrop()`（绘制变换的逆运算），并带正逆往返单测 |
+
+- 新增 `common/editor/CropGeometry.ets`：`CropView` / `CropSize` / `CropDrawTransform` / `cropOutputSize()` / `cropDrawTransform()` / `unprojectCrop()`（纯函数）。
+- 新增 `ImageComposer.composeCropToPixelMap()`：离屏裁剪合成，带 4096 长边护栏，返回像素图 + 实际尺寸 + 护栏缩放比。
+- 新增 `entry/src/test/CropGeometry.test.ets`：7 个用例（输出尺寸随源图密度、无变换情形、绕中心放大、平移、90° 旋转、正逆变换往返、退化输入）。
+- 删除无入口的 `onCropFrameDrag` 与只服务于它的 `panStartX/panStartY`（新模型是"图片动、选区不动"）。
+
+验证：`hvigor … test` 20 个用例全绿；`assembleHap` 通过。
+
+待真机确认：旋转角度与 Canvas `rotate` 的方向约定（两侧同为顺时针，理论一致，需肉眼确认一次）。
+
+---
+
 ## 2026-09-12 阶段 2：预览铺满屏幕 + 保存比例双出口
 
 > 起因：实际运行反馈"图片不是 9:16，预览和保存为壁纸时还是原比例，很怪"。
