@@ -10,6 +10,8 @@ import { PreferenceUtil } from '../utils/PreferenceUtil';
 import { SetWallpaperGuidePanel, WallpaperKind } from './SetWallpaperGuide';
 import { EditGuard } from '../utils/EditGuard';
 import { CanvasSpec } from '../canvas/CanvasSpec';
+import { CanvasPresets, CanvasPreset, PresetIds } from '../canvas/CanvasPresets';
+import { Size } from '../canvas/ViewTransform';
 import { ViewTransform, ViewMath } from '../canvas/ViewTransform';
 import { composeCoverToJpeg } from '../editor/ImageComposer';
 
@@ -140,14 +142,18 @@ export struct ImagePreview {
    * @param srcPath 沙箱内的原图文件路径
    */
   private async composeCanvasRatio(srcPath: string): Promise<ArrayBuffer> {
-    const canvas: CanvasSpec = CanvasSpec.fromDevice();
+    const device: CanvasSpec = CanvasSpec.fromDevice();
+    // 走预设模型（"手机屏幕"预设 = 设备尺寸，行为与之前完全一致）：
+    // 阶段 5 的"比例/模板"栏会复用同一条路径，这里先把它接进真实导出链路。
+    const preset: CanvasPreset = CanvasPresets.byId(PresetIds.DEVICE);
+    const size: Size = CanvasPresets.sizeFor(preset, { width: device.width, height: device.height });
     const source: image.ImageSource = image.createImageSource(srcPath);
     let pm: image.PixelMap | undefined = undefined;
     try {
       pm = await source.createPixelMap();
       const info: image.ImageInfo = pm.getImageInfoSync();
       return await composeCoverToJpeg(pm, info.size.width, info.size.height,
-        canvas.width, canvas.height, this.currentViewTransform(), 95);
+        size.width, size.height, this.currentViewTransform(), 95);
     } finally {
       if (pm !== undefined) {
         pm.release();
