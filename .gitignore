@@ -1,0 +1,31 @@
+/node_modules
+/oh_modules
+/local.properties
+/.idea
+**/build
+/.hvigor
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer
+
+# ===== 以下为后续追加，避免把本机产物/敏感材料写进仓库 =====
+
+# 签名与密钥材料（绝不入库；正式签名请放在 ~/.ohos/config 下由 DevEco 管理）
+/zeroonekey.p12
+/zeroone.csr
+*.p12
+*.csr
+*.p7b
+*.cer
+
+# DevEco Studio 素材缓存（可重新生成）
+/material
+
+# 与本工程无关的独立 npm 包（DSH Web 皮肤管理器，自带 LICENSE/package.json，应独立成仓）
+/dsh-deep-whale
+
+# 本仓库的 git 目录（Codex 沙箱不允许工作区里存在 .git，故改用此名；收尾时可改名回 .git）
+/.gitrepo/
