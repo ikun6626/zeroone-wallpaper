@@ -20,3 +20,7 @@ export const THEME_PHRASES: string[] = ['今日宜吸猫', '不想上班', '周�
 export const QUOTE_PHRASES: string[] = ['生活明朗 万物可爱', '保持热爱 奔赴山海', '温柔且坚定', '慢慢来 比较快', '万事胜意', '未来可期', '每天都值得被爱', '所爱隔山海 山海皆可平'];
 /** 裁剪框最小尺寸 */
 export const CROP_MIN: number = 60;
+/** 画布适配：铺满（cover，裁掉超出部分；壁纸默认） */
+export const FIT_MODE_COVER: string = 'cover';
+/** 画布适配：完整显示（contain，留白用模糊底图填充） */
+export const FIT_MODE_CONTAIN: string = 'contain';
