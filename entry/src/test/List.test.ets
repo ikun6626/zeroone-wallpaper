@@ -3,6 +3,7 @@ import canvasGeometryTest from './CanvasGeometry.test';
 import cropGeometryTest from './CropGeometry.test';
 import canvasPresetsTest from './CanvasPresets.test';
 import layerStoreTest from './LayerStore.test';
+import canvasStateTest from './CanvasState.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -10,4 +11,5 @@ export default function testsuite() {
   cropGeometryTest();
   canvasPresetsTest();
   layerStoreTest();
+  canvasStateTest();
 }
