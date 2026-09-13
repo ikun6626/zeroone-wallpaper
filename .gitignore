@@ -29,3 +29,6 @@
 
 # 本仓库的 git 目录（Codex 沙箱不允许工作区里存在 .git，故改用此名；收尾时可改名回 .git）
 /.gitrepo/
+
+# 云存储上传包（由 tools/prepare_cloud_assets.py 生成，几十 MB，不入库）
+/assets-out/
