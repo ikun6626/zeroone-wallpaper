@@ -8,6 +8,7 @@ import { CloudDBUtil } from '../utils/CloudDBUtil';
 import { CloudWallpapers } from '../constants/CloudWallpapers';
 import { Wallpaper } from '../../model/Wallpaper';
 import { BusinessError } from '@ohos.base';
+import { CloudProbe } from '../utils/CloudProbe';
 
 /** 文档类型 */
 enum DocKind {
@@ -95,22 +96,55 @@ export struct LegalDocPage {
 
   /** 执行播种并提示结果 */
   private async seedCloud(): Promise<void> {
-    try {
-      // 先读一次再写：能读却写不进去 = 规则里的写权限没放开；
-      // 连读都失败 = 配置/网络/区域不通。这样一步就能把问题范围缩到一半。
-      const existing: Wallpaper[] = await CloudDBUtil.getAllWallpapers();
-      const count: number = await CloudDBUtil.seedWallpapers(CloudWallpapers.all());
-      promptAction.showToast({
-        message: `云端原有 ${existing.length} 条，新写入 ${count} 条；回首页下拉刷新即可看到`
+    // 分三步自检，任一步失败就停并把报告摆出来：
+    //  ① 最小实体探针  —— 判断对象类型名/存储区是否正确
+    //  ② 正式实体读取  —— 判断 schema 与读权限
+    //  ③ 批量写入      —— 判断写权限与字段类型
+    const report: string[] = [];
+    let blocked: boolean = false;
+
+    const probe: string = await CloudProbe.probe();
+    if (probe.length === 0) {
+      report.push('① 对象类型 wallpapers 可访问 ✔');
+    } else {
+      report.push(`① 最小探针失败（说明表名或存储区不对）：${probe}`);
+      blocked = true;
+    }
+
+    if (!blocked) {
+      try {
+        const existing: Wallpaper[] = await CloudDBUtil.getAllWallpapers();
+        report.push(`② 正式实体可读，云端现有 ${existing.length} 条`);
+      } catch (e) {
+        const err: BusinessError = e as BusinessError;
+        console.error(`seedCloud read failed: ${JSON.stringify(e)}`);
+        report.push(`② 正式实体读取失败（schema 或读权限问题）：code=${err.code} ${err.message}`);
+        blocked = true;
+      }
+    }
+
+    if (!blocked) {
+      try {
+        const count: number = await CloudDBUtil.seedWallpapers(CloudWallpapers.all());
+        report.push(`③ 写入成功 ${count} 条，回首页下拉刷新即可看到`);
+      } catch (e) {
+        const err: BusinessError = e as BusinessError;
+        console.error(`seedCloud write failed: ${JSON.stringify(e)}`);
+        report.push(`③ 写入失败（写权限或字段类型问题）：code=${err.code} ${err.message}`);
+        blocked = true;
+      }
+    }
+
+    if (blocked) {
+      promptAction.showDialog({
+        title: '云端自检结果',
+        message: report.join('\n\n'),
+        buttons: [{ text: '知道了', color: '#FF6B6B' }]
+      }).catch(() => {
+        // 弹窗异常时忽略：报告已经写进日志
       });
-    } catch (e) {
-      const err: BusinessError = e as BusinessError;
-      console.error(`seedCloud failed: ${JSON.stringify(e)}`);
-      // 把真实错误码显示出来：1008230002 = 对象类型/Schema 不匹配，
-      // 权限类错误通常是规则没放开，超时/网络类则说明云端根本没通。
-      promptAction.showToast({
-        message: `失败 code=${err.code}：${err.message}`
-      });
+    } else {
+      promptAction.showToast({ message: report[report.length - 1] });
     }
   }
 
