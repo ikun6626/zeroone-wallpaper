@@ -72,6 +72,27 @@ export class CloudDBUtil {
   }
 
   /**
+   * 分批播种壁纸记录（种子数据量较大时用）
+   *
+   * 为什么要分批：一次 upsert 太多条容易撞上请求体上限或超时；
+   * 每批 20 条既能报进度，失败时也容易定位是第几批出的问题。
+   * 语义是 upsert（同 id 覆盖），所以重复执行不会产生重复记录，
+   * 以后加图时把新记录追加进种子列表再执行一次即可。
+   *
+   * @returns 成功写入的条数
+   */
+  static async seedWallpapers(list: Wallpaper[]): Promise<number> {
+    const CHUNK: number = 20;
+    let done: number = 0;
+    for (let i = 0; i < list.length; i += CHUNK) {
+      const part: Wallpaper[] = list.slice(i, i + CHUNK);
+      await CloudDBUtil.getZone().upsert(part);
+      done += part.length;
+    }
+    return done;
+  }
+
+  /**
    * 冷启动数据同步策略（本地秒开 + 后台同步）：
    *  1. 查云数据库全部壁纸；
    *  2. 表为空 → 自动把 10 张内置默认壁纸批量写入云端，并返回默认壁纸；

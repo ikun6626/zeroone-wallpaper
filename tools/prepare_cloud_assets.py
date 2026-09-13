@@ -147,6 +147,7 @@ def parse_args(argv):
     """
     prefix = URL_PREFIX
     paths_only = False
+    emit_seed = ""
     positional = []
     i = 0
     while i < len(argv):
@@ -159,13 +160,18 @@ def parse_args(argv):
             paths_only = True
             i += 1
             continue
+        if arg == "--emit-seed" and i + 1 < len(argv):
+            # 生成 App 内的种子数据源文件（把素材批量写进云数据库用）
+            emit_seed = argv[i + 1]
+            i += 2
+            continue
         positional.append(arg)
         i += 1
-    return positional, prefix, paths_only
+    return positional, prefix, paths_only, emit_seed
 
 
 def main():
-    positional, prefix, paths_only = parse_args(sys.argv[1:])
+    positional, prefix, paths_only, emit_seed = parse_args(sys.argv[1:])
     src = positional[0] if len(positional) > 0 else DEFAULT_SRC
     out = positional[1] if len(positional) > 1 else DEFAULT_OUT
     # 本地目录名与云存储前缀保持一致，上传时整个文件夹拖进去即可
@@ -226,6 +232,49 @@ def main():
             "tags": tags,
             "license_note": "待逐张核对：Pixabay/Unsplash 均可商用，需保留来源页",
         })
+
+    if emit_seed:
+        # 生成 ArkTS 种子数据源文件：只含元数据与云存储路径，图片仍在云存储里，不进包体
+        seed_lines = []
+        seed_lines.append("import { Wallpaper } from '../../model/Wallpaper';")
+        seed_lines.append("")
+        seed_lines.append("/**")
+        seed_lines.append(" * CloudWallpapers —— 云端壁纸种子数据")
+        seed_lines.append(" *")
+        seed_lines.append(" * 由 tools/prepare_cloud_assets.py --emit-seed 生成，**请勿手改**：")
+        seed_lines.append(" * 加图后重跑脚本、再把生成的 SEED 列表替换进来即可。")
+        seed_lines.append(" *")
+        seed_lines.append(" * 用途：把这批素材一次性写进 AGC 云数据库 wallpapers 表。")
+        seed_lines.append(" * imageUrl / thumbnailUrl 存的是**云存储路径**而不是完整链接 ——")
+        seed_lines.append(" * 对象是私有的，显示时由 CloudStorageUtil.getDownloadURL() 换临时链接。")
+        seed_lines.append(" *")
+        seed_lines.append(" * SEED 每行格式：id|标题|分类|作者|上传时间(毫秒)|标签")
+        seed_lines.append(" */")
+        seed_lines.append("export class CloudWallpapers {")
+        seed_lines.append("  private static readonly SEED: string[] = [")
+        for row in rows:
+            category = "自然风光" if row["category"] == "待归类" else row["category"]
+            seed_lines.append("    '%s|%s|%s|%s|%d|%s'," % (
+                row["id"], row["title"], category, row["author"],
+                int(row["upload_time"]), row["tags"]))
+        seed_lines.append("  ];")
+        seed_lines.append("")
+        seed_lines.append("  /** 展开成 Wallpaper 记录（云存储路径按约定拼好） */")
+        seed_lines.append("  static all(): Wallpaper[] {")
+        seed_lines.append("    const out: Wallpaper[] = [];")
+        seed_lines.append("    for (let i = 0; i < CloudWallpapers.SEED.length; i++) {")
+        seed_lines.append("      const f: string[] = CloudWallpapers.SEED[i].split('|');")
+        seed_lines.append("      const id: string = f[0];")
+        seed_lines.append("      out.push(new Wallpaper(id, f[1],")
+        seed_lines.append("        `wallpapers/${id}.jpg`, `thumbs/${id}_thumb.jpg`,")
+        seed_lines.append("        f[2], f[3], parseInt(f[4], 10), f[5]));")
+        seed_lines.append("    }")
+        seed_lines.append("    return out;")
+        seed_lines.append("  }")
+        seed_lines.append("}")
+        with open(emit_seed, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(seed_lines) + "\n")
+        print("种子源文件  : %s（%d 条）" % (emit_seed, len(rows)))
 
     manifest = os.path.join(out, "manifest.csv")
     with open(manifest, "w", newline="", encoding="utf-8-sig") as fh:

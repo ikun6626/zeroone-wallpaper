@@ -4,6 +4,8 @@ import { fileIo } from '@kit.CoreFileKit';
 import { AppInfo } from '../utils/AppInfo';
 import { EditGuard } from '../utils/EditGuard';
 import { WallpaperStore } from '../store/WallpaperStore';
+import { CloudDBUtil } from '../utils/CloudDBUtil';
+import { CloudWallpapers } from '../constants/CloudWallpapers';
 
 /** 文档类型 */
 enum DocKind {
@@ -64,6 +66,41 @@ export struct LegalDocPage {
     '第三方组件\n本应用使用 HarmonyOS 官方能力（ArkUI、Image Kit、Cloud Foundation Kit 等），未使用任何第三方广告或数据采集 SDK。',
     '备案与主体信息\n应用名称：ZeroOne 壁纸\n开发者：ZeroOne\n联系邮箱：zeroone@example.com\n（正式上架前请在此补充备案号/统一社会信用代码等主体信息）'
   ];
+
+  /**
+   * 写入云端壁纸数据（长按版本号触发，开发期工具，上架前可移除）
+   *
+   * 之所以做成应用内入口而不是手工导 CSV：字段名大小写、Long 类型、主键唯一性
+   * 全由 SDK 保证，一批一次成型；而且是 upsert 语义，重复执行不会产生重复记录。
+   */
+  private confirmSeed(): void {
+    const total: number = CloudWallpapers.all().length;
+    promptAction.showDialog({
+      title: '写入云端壁纸数据',
+      message: `将把 ${total} 条壁纸记录写入云数据库（同 id 覆盖，可重复执行）。确认开始？`,
+      buttons: [
+        { text: '取消', color: '#666666' },
+        { text: '开始写入', color: '#FF6B6B' }
+      ]
+    }).then((result: promptAction.ShowDialogSuccessResponse) => {
+      if (result.index === 1) {
+        this.seedCloud();
+      }
+    }).catch(() => {
+      // 取消或弹窗异常：什么都不做
+    });
+  }
+
+  /** 执行播种并提示结果 */
+  private async seedCloud(): Promise<void> {
+    try {
+      const count: number = await CloudDBUtil.seedWallpapers(CloudWallpapers.all());
+      promptAction.showToast({ message: `已写入 ${count} 条，回首页下拉重试即可看到` });
+    } catch (e) {
+      console.error(`seedCloud failed: ${JSON.stringify(e)}`);
+      promptAction.showToast({ message: '写入失败：检查网络与云数据库配置' });
+    }
+  }
 
   aboutToAppear(): void {
     // 文档页是覆盖层：返回键应先关它
@@ -182,7 +219,14 @@ export struct LegalDocPage {
                 .fontSize(13)
                 .fontColor('#9A9AA5')
                 .layoutWeight(1)
-              Text(AppInfo.versionFull())
+          Text(AppInfo.versionFull())
+            // 开发期工具：长按版本号把种子数据写进云数据库（上架前可移除）
+            .gesture(
+              LongPressGesture()
+                .onAction(() => {
+                  this.confirmSeed();
+                })
+            )
                 .fontSize(13)
                 .fontColor('#F2F2F5')
             }
