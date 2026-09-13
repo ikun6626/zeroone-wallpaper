@@ -2,6 +2,7 @@ import { Wallpaper } from '../../model/Wallpaper';
 import { CloudDBUtil } from '../utils/CloudDBUtil';
 import { DefaultWallpapers } from '../constants/DefaultWallpapers';
 import { PreferenceUtil } from '../utils/PreferenceUtil';
+import { CloudStorageUtil } from '../utils/CloudStorageUtil';
 
 /**
  * 缓存 DTO —— 只保留渲染必需字段
@@ -151,6 +152,28 @@ export class WallpaperStore {
     }
   }
 
+  /**
+   * 把记录里的"云存储路径"批量换成可加载的临时链接
+   *
+   * 缓存落盘的始终是原始路径（见 writeCache），临时链接只在内存里活 ——
+   * 否则本地缓存与云数据库里会沉积一批过期链接，下次冷启动整屏加载失败。
+   * 返回新数组，不改入参，保证原始路径不被覆盖。
+   */
+  private async resolveUrls(list: Wallpaper[]): Promise<Wallpaper[]> {
+    const out: Wallpaper[] = [];
+    for (let i = 0; i < list.length; i++) {
+      const w: Wallpaper = list[i];
+      const image: string = await CloudStorageUtil.urlFor(w.imageUrl);
+      const thumb: string = await CloudStorageUtil.urlFor(w.thumbnailUrl);
+      const copy: Wallpaper = new Wallpaper(w.id, w.title, image, thumb,
+        w.category, w.author, w.uploadTime, w.tags);
+      copy.ratingSum = w.ratingSum;
+      copy.ratingCount = w.ratingCount;
+      out.push(copy);
+    }
+    return out;
+  }
+
   /** 首屏加载具体流程 */
   private async bootstrap(): Promise<Wallpaper[]> {
     let first: Wallpaper[] = [];
@@ -196,10 +219,12 @@ export class WallpaperStore {
     this.cloudOffset = page.length;
     // 满页才可能有下一页；不满页直接到底
     AppStorage.setOrCreate<boolean>(StoreKeys.MORE, page.length === WallpaperStore.PAGE_SIZE);
-    AppStorage.setOrCreate<Wallpaper[]>(StoreKeys.LIST, page);
     AppStorage.setOrCreate<boolean>(StoreKeys.FROM_CACHE, false);
+    // 先按原始路径落盘缓存，再把链接解析好发布给界面（临时链接不落盘）
     this.writeCache(page);
-    return page;
+    const shown: Wallpaper[] = await this.resolveUrls(page);
+    AppStorage.setOrCreate<Wallpaper[]>(StoreKeys.LIST, shown);
+    return shown;
   }
 
   // ==================== 分页 ====================
@@ -230,8 +255,10 @@ export class WallpaperStore {
       }
       this.cloudOffset += page.length;
       const merged: Wallpaper[] = WallpaperStore.mergeDedup(current, page);
-      AppStorage.setOrCreate<Wallpaper[]>(StoreKeys.LIST, merged);
-      return merged;
+      // 已解析过的 http 链接会原样返回，只有新来的路径需要签发临时链接
+      const resolved: Wallpaper[] = await this.resolveUrls(merged);
+      AppStorage.setOrCreate<Wallpaper[]>(StoreKeys.LIST, resolved);
+      return resolved;
     } catch (e) {
       // 关键修复：分页失败**不能**把 MORE 置 false。
       // 此前这里一旦失败就永久到底，用户恢复网络也无法继续翻页，只能杀进程重启。
