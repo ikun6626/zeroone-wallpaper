@@ -44,6 +44,8 @@ export struct HomePage {
   @StorageProp('wallpaperError') hasError: boolean = false;
   /** 云端不可用，当前展示内置兜底数据 */
   @StorageProp('wallpaperOffline') offline: boolean = false;
+  /** 云端失败的具体原因（WallpaperStore 写入，便于不连调试器也能定位配置问题） */
+  @StorageProp('wallpaperErrorText') errorText: string = '';
 
   /** remoteReady 上限：长列表滚动后远端标记无需无限增长 */
   private static readonly REMOTE_READY_MAX: number = 60;
@@ -334,6 +336,14 @@ export struct HomePage {
               .fontSize(11)
               .fontColor('#E6C07E')
               .layoutWeight(1)
+            if (this.errorText.length > 0) {
+              // 直接显示云服务返回的错误码：权限/区域/Schema 问题一眼可辨
+              Text(this.errorText)
+                .fontSize(10)
+                .fontColor('#8A8A95')
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
             Text('重试')
               .fontSize(11)
               .fontColor('#FF6B6B')

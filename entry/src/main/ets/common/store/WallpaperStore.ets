@@ -3,6 +3,7 @@ import { CloudDBUtil } from '../utils/CloudDBUtil';
 import { DefaultWallpapers } from '../constants/DefaultWallpapers';
 import { PreferenceUtil } from '../utils/PreferenceUtil';
 import { CloudStorageUtil } from '../utils/CloudStorageUtil';
+import { BusinessError } from '@ohos.base';
 
 /**
  * 缓存 DTO —— 只保留渲染必需字段
@@ -49,6 +50,13 @@ export class StoreKeys {
   static readonly ERROR: string = 'wallpaperError';
   /** 云端不可用，当前展示的是内置兜底数据 */
   static readonly OFFLINE: string = 'wallpaperOffline';
+  /**
+   * 云端失败的具体原因（code + message）
+   *
+   * 为什么单独存一份：云服务报错如果只写进日志，用户/开发者要连调试器才能看到，
+   * 而"离线提示条"是现成的展示位置 —— 把真实错误码摆在界面上，配置问题一眼可辨。
+   */
+  static readonly ERROR_TEXT: string = 'wallpaperErrorText';
   /** 首屏数据来自本地缓存（可用于区分"秒开缓存"与"云端新鲜数据"） */
   static readonly FROM_CACHE: string = 'wallpaperFromCache';
 }
@@ -182,6 +190,10 @@ export class WallpaperStore {
     } catch (e) {
       // 云服务不可用（无网/未配置）：标记离线态供页面提示与重试，绝不黑屏
       console.error(`WallpaperStore cloud query failed, fallback to defaults: ${JSON.stringify(e)}`);
+      // 把真实错误码留下来，界面在离线提示条里展示（只连日志的话要开调试器才能看到）
+      const err: BusinessError = e as BusinessError;
+      AppStorage.setOrCreate<string>(StoreKeys.ERROR_TEXT,
+        `code=${err.code} ${err.message === undefined ? '' : err.message}`);
       this.offline = true;
       AppStorage.setOrCreate<boolean>(StoreKeys.OFFLINE, true);
       AppStorage.setOrCreate<boolean>(StoreKeys.ERROR, true);
