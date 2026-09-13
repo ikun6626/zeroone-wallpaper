@@ -139,9 +139,25 @@ def kb(path):
     return round(os.path.getsize(path) / 1024.0, 1)
 
 
+def parse_args(argv):
+    """支持 --prefix 传入云存储域名，免得去改脚本源码"""
+    prefix = URL_PREFIX
+    positional = []
+    i = 0
+    while i < len(argv):
+        if argv[i] in ("--prefix", "-p") and i + 1 < len(argv):
+            prefix = argv[i + 1].strip().rstrip("/")
+            i += 2
+            continue
+        positional.append(argv[i])
+        i += 1
+    return positional, prefix
+
+
 def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SRC
-    out = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_OUT
+    positional, prefix = parse_args(sys.argv[1:])
+    src = positional[0] if len(positional) > 0 else DEFAULT_SRC
+    out = positional[1] if len(positional) > 1 else DEFAULT_OUT
     # 本地目录名与云存储前缀保持一致，上传时整个文件夹拖进去即可
     detail_dir = os.path.join(out, DETAIL_PREFIX)
     thumb_dir = os.path.join(out, THUMB_PREFIX)
@@ -215,8 +231,8 @@ def main():
         for r in rows:
             writer.writerow([
                 r["id"], r["title"],
-                "%s/%s/%s.jpg" % (URL_PREFIX, DETAIL_PREFIX, r["id"]),
-                "%s/%s/%s_thumb.jpg" % (URL_PREFIX, THUMB_PREFIX, r["id"]),
+                "%s/%s/%s.jpg" % (prefix, DETAIL_PREFIX, r["id"]),
+                "%s/%s/%s_thumb.jpg" % (prefix, THUMB_PREFIX, r["id"]),
                 r["category"], r["author"], r["upload_time"], r["tags"], 0, 0,
             ])
 
@@ -229,6 +245,11 @@ def main():
     print("缩略图合计  : %.1f MB（长边 %d）" % (total_thumb, THUMB_EDGE))
     print("版权台账    : %s" % manifest)
     print("导入用 CSV  : %s" % import_csv)
+    if "REPLACE-WITH-BUCKET-DOMAIN" in prefix:
+        print("")
+        print("提醒：导入 CSV 里的域名还是占位符，App 读不到图。")
+        print("      换成真实桶域名后重跑（图片会跳过重压，只重写 CSV）：")
+        print("      E:\\Anaconda\\python.exe tools\\prepare_cloud_assets.py --prefix https://你的桶域名")
     if failed:
         print("失败 %d 张：" % len(failed))
         for line in failed:
