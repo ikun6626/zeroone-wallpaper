@@ -140,22 +140,32 @@ def kb(path):
 
 
 def parse_args(argv):
-    """支持 --prefix 传入云存储域名，免得去改脚本源码"""
+    """
+    支持两种上传后的取图方式：
+      --prefix https://桶域名   对象设了公共读/自建 CDN 时用，写完整直链
+      --paths-only             走 SDK getDownloadURL 临时链接时用，只写云存储路径
+    """
     prefix = URL_PREFIX
+    paths_only = False
     positional = []
     i = 0
     while i < len(argv):
-        if argv[i] in ("--prefix", "-p") and i + 1 < len(argv):
+        arg = argv[i]
+        if arg in ("--prefix", "-p") and i + 1 < len(argv):
             prefix = argv[i + 1].strip().rstrip("/")
             i += 2
             continue
-        positional.append(argv[i])
+        if arg == "--paths-only":
+            paths_only = True
+            i += 1
+            continue
+        positional.append(arg)
         i += 1
-    return positional, prefix
+    return positional, prefix, paths_only
 
 
 def main():
-    positional, prefix = parse_args(sys.argv[1:])
+    positional, prefix, paths_only = parse_args(sys.argv[1:])
     src = positional[0] if len(positional) > 0 else DEFAULT_SRC
     out = positional[1] if len(positional) > 1 else DEFAULT_OUT
     # 本地目录名与云存储前缀保持一致，上传时整个文件夹拖进去即可
@@ -229,10 +239,15 @@ def main():
         writer.writerow(["id", "title", "imageUrl", "thumbnailUrl", "category",
                          "author", "uploadTime", "tags", "ratingSum", "ratingCount"])
         for r in rows:
+            image_value = "%s/%s.jpg" % (DETAIL_PREFIX, r["id"])
+            thumb_value = "%s/%s_thumb.jpg" % (THUMB_PREFIX, r["id"])
+            if not paths_only:
+                # 仅当对象可公共读或走自建 CDN 时，才写完整直链
+                image_value = "%s/%s" % (prefix, image_value)
+                thumb_value = "%s/%s" % (prefix, thumb_value)
             writer.writerow([
                 r["id"], r["title"],
-                "%s/%s/%s.jpg" % (prefix, DETAIL_PREFIX, r["id"]),
-                "%s/%s/%s_thumb.jpg" % (prefix, THUMB_PREFIX, r["id"]),
+                image_value, thumb_value,
                 r["category"], r["author"], r["upload_time"], r["tags"], 0, 0,
             ])
 
@@ -245,7 +260,7 @@ def main():
     print("缩略图合计  : %.1f MB（长边 %d）" % (total_thumb, THUMB_EDGE))
     print("版权台账    : %s" % manifest)
     print("导入用 CSV  : %s" % import_csv)
-    if "REPLACE-WITH-BUCKET-DOMAIN" in prefix:
+    if not paths_only and "REPLACE-WITH-BUCKET-DOMAIN" in prefix:
         print("")
         print("提醒：导入 CSV 里的域名还是占位符，App 读不到图。")
         print("      换成真实桶域名后重跑（图片会跳过重压，只重写 CSV）：")
