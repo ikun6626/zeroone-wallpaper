@@ -6,6 +6,8 @@ import { EditGuard } from '../utils/EditGuard';
 import { WallpaperStore } from '../store/WallpaperStore';
 import { CloudDBUtil } from '../utils/CloudDBUtil';
 import { CloudWallpapers } from '../constants/CloudWallpapers';
+import { Wallpaper } from '../../model/Wallpaper';
+import { BusinessError } from '@ohos.base';
 
 /** 文档类型 */
 enum DocKind {
@@ -94,11 +96,21 @@ export struct LegalDocPage {
   /** 执行播种并提示结果 */
   private async seedCloud(): Promise<void> {
     try {
+      // 先读一次再写：能读却写不进去 = 规则里的写权限没放开；
+      // 连读都失败 = 配置/网络/区域不通。这样一步就能把问题范围缩到一半。
+      const existing: Wallpaper[] = await CloudDBUtil.getAllWallpapers();
       const count: number = await CloudDBUtil.seedWallpapers(CloudWallpapers.all());
-      promptAction.showToast({ message: `已写入 ${count} 条，回首页下拉重试即可看到` });
+      promptAction.showToast({
+        message: `云端原有 ${existing.length} 条，新写入 ${count} 条；回首页下拉刷新即可看到`
+      });
     } catch (e) {
+      const err: BusinessError = e as BusinessError;
       console.error(`seedCloud failed: ${JSON.stringify(e)}`);
-      promptAction.showToast({ message: '写入失败：检查网络与云数据库配置' });
+      // 把真实错误码显示出来：1008230002 = 对象类型/Schema 不匹配，
+      // 权限类错误通常是规则没放开，超时/网络类则说明云端根本没通。
+      promptAction.showToast({
+        message: `失败 code=${err.code}：${err.message}`
+      });
     }
   }
 
