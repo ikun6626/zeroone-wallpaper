@@ -31,6 +31,13 @@ THUMB_QUALITY = 80
 # 上传到云存储后的公网地址前缀；上传完把这里改成真实域名再重跑，导入 CSV 即可直接用
 URL_PREFIX = "https://REPLACE-WITH-BUCKET-DOMAIN"
 
+# 云存储里的两个前缀（AGC 控制台里表现为两个文件夹）：
+#   wallpapers/ 原图 —— 详情与下载用，将来可改私有 + 签名 URL 防盗链
+#   thumbs/     缩略图 —— 列表要用，必须保持公共读
+# 本地输出目录名与它们一致，上传时直接拖文件夹，不用手工对应。
+DETAIL_PREFIX = "wallpapers"
+THUMB_PREFIX = "thumbs"
+
 CATEGORY_RULES = [
     ("动物萌宠", ["cat", "kitten", "dog", "puppy", "animal", "horse", "bird", "rabbit",
                   "wildlife", "fox", "lion", "tiger", "panda", "sheep", "cow", "pet",
@@ -135,8 +142,9 @@ def kb(path):
 def main():
     src = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SRC
     out = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_OUT
-    detail_dir = os.path.join(out, "detail")
-    thumb_dir = os.path.join(out, "thumb")
+    # 本地目录名与云存储前缀保持一致，上传时整个文件夹拖进去即可
+    detail_dir = os.path.join(out, DETAIL_PREFIX)
+    thumb_dir = os.path.join(out, THUMB_PREFIX)
     os.makedirs(detail_dir, exist_ok=True)
     os.makedirs(thumb_dir, exist_ok=True)
 
@@ -184,9 +192,9 @@ def main():
             "category": category,
             "title": guess_title(name),
             "orig_w": ow, "orig_h": oh,
-            "detail_file": "detail/%s.jpg" % img_id,
+            "detail_file": "%s/%s.jpg" % (DETAIL_PREFIX, img_id),
             "detail_w": d_w, "detail_h": d_h, "detail_kb": kb(detail_path),
-            "thumb_file": "thumb/%s_thumb.jpg" % img_id,
+            "thumb_file": "%s/%s_thumb.jpg" % (THUMB_PREFIX, img_id),
             "thumb_w": t_w, "thumb_h": t_h, "thumb_kb": kb(thumb_path),
             "upload_time": int(os.path.getmtime(os.path.join(src, name)) * 1000),
             "tags": tags,
@@ -207,8 +215,8 @@ def main():
         for r in rows:
             writer.writerow([
                 r["id"], r["title"],
-                "%s/wallpapers/%s.jpg" % (URL_PREFIX, r["id"]),
-                "%s/wallpapers/%s_thumb.jpg" % (URL_PREFIX, r["id"]),
+                "%s/%s/%s.jpg" % (URL_PREFIX, DETAIL_PREFIX, r["id"]),
+                "%s/%s/%s_thumb.jpg" % (URL_PREFIX, THUMB_PREFIX, r["id"]),
                 r["category"], r["author"], r["upload_time"], r["tags"], 0, 0,
             ])
 
