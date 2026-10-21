@@ -11,7 +11,7 @@ import { EditGuard } from '../utils/EditGuard';
  *    引导用户在「图库」里设为锁屏/桌面壁纸。
  *
  * 本文件把这条闭环的**文案 + 弹窗 + 页内引导卡片**集中在这里，
- * 首页大图预览（ImagePreview）、贴纸工作台（StickerStudioPage）以及后续任何
+ * 首页大图预览（ImagePreview）、贴纸专区（StickerPage）以及后续任何
  * 导出路径统一调用，避免各写一份导致文案漂移（此前“一键设为壁纸”的虚假承诺
  * 就是各写一份造成的）。
  */
@@ -67,8 +67,8 @@ export async function showSetWallpaperDialog(kind: number): Promise<void> {
     title: `${name}壁纸图已保存到相册`,
     message: `设置${name}壁纸步骤：\n${setWallpaperSteps(kind)}`,
     buttons: [
-      { text: '复制步骤', color: '#9A9AA5' },
-      { text: '我知道了', color: '#FF6B6B' }
+      { text: '复制步骤', color: '#A8A8B5' },
+      { text: '我知道了', color: '#C9333D' }
     ]
   });
   // index 0 = 复制步骤
@@ -151,7 +151,7 @@ export struct SetWallpaperGuidePanel {
           Blank()
           Text('✕')
             .fontSize(16)
-            .fontColor('#7A7A85')
+            .fontColor('#A8A8B5')
             .width(28)
             .height(28)
             .textAlign(TextAlign.Center)
@@ -176,7 +176,7 @@ export struct SetWallpaperGuidePanel {
 
         Text(setWallpaperSteps(this.activeKind))
           .fontSize(13)
-          .fontColor('#9A9AA5')
+          .fontColor('#A8A8B5')
           .lineHeight(22)
           .width('100%')
 
@@ -193,7 +193,7 @@ export struct SetWallpaperGuidePanel {
           Button('我知道了')
             .fontSize(13)
             .fontColor(Color.White)
-            .backgroundColor('#FF6B6B')
+            .backgroundColor('#C9333D')
             .height(40)
             .layoutWeight(1)
             .onClick(() => {

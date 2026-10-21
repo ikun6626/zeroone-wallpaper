@@ -397,8 +397,9 @@ export async function composeCropToPixelMap(base: image.PixelMap, baseW: number,
   ctx.save();
   ctx.translate(t.tx, t.ty);
   ctx.rotate(t.radians);
-  ctx.scale(t.scale, t.scale);
-  ctx.drawImage(base, 0, 0, baseW, baseH);
+  ctx.scale(t.scale * t.sx, t.scale * t.sy);
+  // 镜像时把图平移到负坐标（绕图片中心镜像）
+  ctx.drawImage(base, t.sx < 0 ? -baseW : 0, t.sy < 0 ? -baseH : 0, baseW, baseH);
   ctx.restore();
 
   const outPm: image.PixelMap = ctx.getPixelMap(0, 0, limited.width, limited.height);

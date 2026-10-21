@@ -1,106 +1,54 @@
 import { Wallpaper } from '../../model/Wallpaper';
-import { CloudDBUtil } from '../utils/CloudDBUtil';
-import { DefaultWallpapers } from '../constants/DefaultWallpapers';
+import { LocalWallpapers } from '../constants/LocalWallpapers';
 import { PreferenceUtil } from '../utils/PreferenceUtil';
-import { CloudStorageUtil } from '../utils/CloudStorageUtil';
-import { BusinessError } from '@ohos.base';
-
-/**
- * 缓存 DTO —— 只保留渲染必需字段
- *
- * 为什么不直接 JSON.stringify(Wallpaper)：
- *  1. Wallpaper 继承 cloudDatabase.DatabaseObject，基类内部字段不该被落盘；
- *  2. 更关键的是——Wallpaper.tagList / avgRating 是**原型上的 getter**，
- *     JSON.parse 得到的是纯对象，没有 getter，页面访问 item.tagList 会直接崩。
- *     所以必须显式做 DTO 往返，重新 new 出真正的 Wallpaper 实例。
- */
-interface WallpaperDTO {
-  id: string;
-  title: string;
-  imageUrl: string;
-  thumbnailUrl: string;
-  category: string;
-  author: string;
-  uploadTime: number;
-  tags: string;
-  /** 评分字段当前 UI 未使用，但属于云端 schema：一并缓存，避免将来回写云端时被清零 */
-  ratingSum: number;
-  ratingCount: number;
-}
+import { WallpaperApi } from '../net/WallpaperApi';
+import { ApiConfig } from '../net/ApiConfig';
 
 /**
  * StoreKeys —— 视图状态键（单一数据源契约）
  *
  * 页面只允许订阅这些 AppStorage 键，不得去读 Store 的私有字段：
- *  - 私有字段变化不会触发刷新（此前 hasMore()/isBusy() 就踩过这个坑），
- *    必须落成 AppStorage 键才会驱动 @StorageProp 重渲染。
- *  - 页面装饰器里要写字符串字面量（@StorageProp 只接受常量），
- *    因此这里的键名和页面里的写法必须逐字一致。
+ * 私有字段变化不会触发刷新，必须落成 AppStorage 键才会驱动 @StorageProp 重渲染。
+ * 页面装饰器里要写字符串字面量（@StorageProp 只接受常量），
+ * 因此这里的键名和页面里的写法必须逐字一致。
+ *
+ * 数据策略（云端优先 + 本地兜底 · 合并展示）：
+ *  - 启动先同步发布内置目录（首帧秒开，295 张全部可见），随后异步拉取云端列表；
+ *  - 云端成功 → 合并：云端独有的新壁纸排最前，本地目录顺序不变，
+ *    同一张就地升级为云端高清版（id 不变，收藏不失效）；支持分页继续合并；
+ *  - 云端失败（断网/服务不可用）→ 保留内置数据，OFFLINE=true 顶部提示。
  */
 export class StoreKeys {
   /** 壁纸列表 */
   static readonly LIST: string = 'wallpaperList';
-  /** 首屏加载中（**仅在没有数据可展示时**为 true，用于骨架屏） */
+  /** 首屏加载中（云端首屏请求期间为 true，仅当本地兜底也无数据时页面才显示骨架屏） */
   static readonly LOADING: string = 'wallpaperLoading';
   /** 分页加载中 */
   static readonly LOADING_MORE: string = 'wallpaperLoadingMore';
-  /** 是否还有下一页；请求失败时必须保持 true，否则会永久锁死分页 */
+  /** 是否还有下一页 */
   static readonly MORE: string = 'wallpaperMore';
-  /** 最近一次请求失败（可重试） */
+  /** 最近一次失败（分页失败置 true，重试成功清零） */
   static readonly ERROR: string = 'wallpaperError';
-  /** 云端不可用，当前展示的是内置兜底数据 */
+  /** 离线兜底标识（正在展示内置壁纸时为 true） */
   static readonly OFFLINE: string = 'wallpaperOffline';
-  /**
-   * 云端失败的具体原因（code + message）
-   *
-   * 为什么单独存一份：云服务报错如果只写进日志，用户/开发者要连调试器才能看到，
-   * 而"离线提示条"是现成的展示位置 —— 把真实错误码摆在界面上，配置问题一眼可辨。
-   */
+  /** 失败原因文本 */
   static readonly ERROR_TEXT: string = 'wallpaperErrorText';
-  /** 首屏数据来自本地缓存（可用于区分"秒开缓存"与"云端新鲜数据"） */
+  /** 是否来自本地兜底（= OFFLINE，保留键位兼容页面结构） */
   static readonly FROM_CACHE: string = 'wallpaperFromCache';
 }
 
 /**
- * WallpaperStore —— 壁纸数据统一数据源（进程内单例）
+ * WallpaperStore —— 壁纸数据统一数据源（进程内单例 · 云端优先）
  *
- * 三条铁律（对应交互审计中的 H2/H3）：
- *  1. **启动永不清空已展示数据**：先同步读本地缓存喂给 UI（秒开），再后台向云端刷新。
- *     此前 start() 无条件 setOrCreate([]) 会让每次冷启动先黑屏闪一下。
- *  2. **失败永不降级能力**：分页失败只暴露 ERROR 状态位，绝不把 MORE 置 false；
- *     网络抖动是瞬时的，一旦锁死用户只能杀进程。
- *  3. **状态必须可观察**：所有 loading/more/error 都落成 AppStorage 键，
- *     页面用 @StorageProp 订阅；Store 私有字段仅用于并发控制。
- *
- * 职责：
- *  - 冷启动首屏（start/refresh）：缓存秒开 → 分页查云库；
- *    空表 → 播种默认壁纸后按本地默认数据分页；云服务失败 → 内置数据兜底并标记离线。
- *  - 上拉分页（loadMore）：追加更早的数据并按 id 去重，写回 AppStorage('wallpaperList')。
- *  - 失败重试（retry）：无数据 → 重拉首屏；已有数据 → 重试下一页。
+ * 保留的契约：
+ *  - 页面只订阅 AppStorage 状态键（@StorageProp），不得读 Store 的私有字段；
+ *  - start()/loadMore()/ensureLoaded()/retry() 保持原签名，页面调用点零改动。
  */
 export class WallpaperStore {
-  /** 每页条数 */
-  private static readonly PAGE_SIZE: number = 10;
-  /**
-   * 本地缓存最多保留条数
-   * 一页足够实现"秒开首屏"，同时把 Preferences 的单个 value 控制在几 KB 以内。
-   */
-  private static readonly CACHE_MAX: number = 10;
-  /** 缓存存储键 */
-  private static readonly KEY_CACHE: string = 'wallpaper_cache_v1';
+  /** 旧版缓存键：只用于"清除缓存"时顺手清理历史数据 */
+  private static readonly KEY_CACHE_LEGACY: string = 'wallpaper_cache_v1';
 
   private static instance: WallpaperStore | undefined = undefined;
-
-  /** 首屏请求进行中（去重，防止入口重复触发） */
-  private inFlight: Promise<Wallpaper[]> | undefined = undefined;
-  /** 分页加载中（防重入） */
-  private loadingMore: boolean = false;
-  /** 云端分页游标：已取条数（query.limit 的 offset） */
-  private cloudOffset: number = 0;
-  /** 空表播种场景：分页直接切本地默认数据（云端此时也只有这批数据） */
-  private seededLocal: Wallpaper[] | undefined = undefined;
-  /** 离线兜底模式：云服务不可用，全量本地数据，不再分页 */
-  private offline: boolean = false;
 
   /** 获取单例 */
   static getInstance(): WallpaperStore {
@@ -110,285 +58,199 @@ export class WallpaperStore {
     return WallpaperStore.instance;
   }
 
+  /** 本地兜底数据 */
+  private static all(): Wallpaper[] {
+    return LocalWallpapers.ALL;
+  }
+
+  /** 云端分页游标（下一页页码） */
+  private page: number = 1;
+  /** 是否正在拉取云端首屏 */
+  private loadingCloud: boolean = false;
+  /** 已拉取到的云端壁纸（首屏 + 各页累计，合并的唯一云端输入） */
+  private cloudItems: Wallpaper[] = [];
+
+  /**
+   * 把云端数据合并进列表并发布：
+   *  1. 云端独有（本地目录没有的新运营壁纸）排最前，保持云端分页顺序；
+   *  2. 本地目录顺序不变，同 id 有云端版就用云端版（就地升级），否则保留本地版。
+   */
+  private mergeCloud(): void {
+    const local: Wallpaper[] = LocalWallpapers.ALL;
+    const localIds: Set<string> = new Set<string>();
+    for (const w of local) {
+      localIds.add(w.id);
+    }
+    const cloudById: Map<string, Wallpaper> = new Map<string, Wallpaper>();
+    for (const w of this.cloudItems) {
+      cloudById.set(w.id, w);
+    }
+
+    const result: Wallpaper[] = [];
+    for (const c of this.cloudItems) {
+      if (!localIds.has(c.id)) {
+        result.push(c);
+      }
+    }
+    for (const w of local) {
+      const upgraded: Wallpaper | undefined = cloudById.get(w.id);
+      result.push(upgraded !== undefined ? upgraded : w);
+    }
+    AppStorage.setOrCreate<Wallpaper[]>(StoreKeys.LIST, result);
+  }
+
   // ==================== 启动 ====================
 
   /**
-   * 入口启动：先同步喂缓存，再后台刷新（幂等）
-   *
-   * 顺序很关键：readCache() 是同步的（getPreferencesSync），
-   * 所以首帧就有数据可渲染，不会出现"先黑屏再出图"。
+   * 入口启动（幂等）：
+   *  1. 同步发布内置目录 → 首帧即有内容（不白屏）；
+   *  2. 异步拉取云端首屏 → 成功后整体替换（页面订阅 wallpaperList 自动刷新）。
    */
   start(): void {
-    const cached: Wallpaper[] = this.readCache();
-    AppStorage.setOrCreate<Wallpaper[]>(StoreKeys.LIST, cached);
-    AppStorage.setOrCreate<boolean>(StoreKeys.FROM_CACHE, cached.length > 0);
-    // 有缓存时后台静默刷新，不显示骨架屏；无缓存才需要 loading
-    AppStorage.setOrCreate<boolean>(StoreKeys.LOADING, cached.length === 0);
+    const local: Wallpaper[] = WallpaperStore.all();
+    AppStorage.setOrCreate<Wallpaper[]>(StoreKeys.LIST, local);
+    AppStorage.setOrCreate<boolean>(StoreKeys.LOADING, false);
     AppStorage.setOrCreate<boolean>(StoreKeys.LOADING_MORE, false);
     AppStorage.setOrCreate<boolean>(StoreKeys.MORE, true);
     AppStorage.setOrCreate<boolean>(StoreKeys.ERROR, false);
     AppStorage.setOrCreate<boolean>(StoreKeys.OFFLINE, false);
-    this.refresh();
-  }
+    AppStorage.setOrCreate<string>(StoreKeys.ERROR_TEXT, '');
+    AppStorage.setOrCreate<boolean>(StoreKeys.FROM_CACHE, false);
 
-  /** 确保首屏已加载（幂等；重复调用复用同一个 Promise） */
-  async ensureLoaded(force: boolean = false): Promise<Wallpaper[]> {
-    const cached: Wallpaper[] = AppStorage.get<Wallpaper[]>(StoreKeys.LIST) ?? [];
-    if (!force && cached.length > 0) {
-      return cached;
-    }
-    if (this.inFlight !== undefined) {
-      return this.inFlight;
-    }
-    this.inFlight = this.refresh();
-    try {
-      return await this.inFlight;
-    } finally {
-      this.inFlight = undefined;
-    }
-  }
-
-  /** 首屏刷新：只在"无数据可展示"时才点亮骨架屏 */
-  private async refresh(): Promise<Wallpaper[]> {
-    const current: Wallpaper[] = AppStorage.get<Wallpaper[]>(StoreKeys.LIST) ?? [];
-    AppStorage.setOrCreate<boolean>(StoreKeys.LOADING, current.length === 0);
-    AppStorage.setOrCreate<boolean>(StoreKeys.ERROR, false);
-    try {
-      return await this.bootstrap();
-    } finally {
-      AppStorage.setOrCreate<boolean>(StoreKeys.LOADING, false);
-    }
+    // 异步云端加载（fire-and-forget：结果通过 AppStorage 键广播给页面）
+    this.loadCloud();
   }
 
   /**
-   * 把记录里的"云存储路径"批量换成可加载的临时链接
-   *
-   * 缓存落盘的始终是原始路径（见 writeCache），临时链接只在内存里活 ——
-   * 否则本地缓存与云数据库里会沉积一批过期链接，下次冷启动整屏加载失败。
-   * 返回新数组，不改入参，保证原始路径不被覆盖。
+   * 拉取云端首屏（内部方法）。
+   * 成功 → 用云端列表替换 + MORE=hasMore；失败 → 保留当前数据 + 置 OFFLINE。
    */
-  private async resolveUrls(list: Wallpaper[]): Promise<Wallpaper[]> {
-    const out: Wallpaper[] = [];
-    for (let i = 0; i < list.length; i++) {
-      const w: Wallpaper = list[i];
-      const image: string = await CloudStorageUtil.urlFor(w.imageUrl);
-      const thumb: string = await CloudStorageUtil.urlFor(w.thumbnailUrl);
-      const copy: Wallpaper = new Wallpaper(w.id, w.title, image, thumb,
-        w.category, w.author, w.uploadTime, w.tags);
-      copy.ratingSum = w.ratingSum;
-      copy.ratingCount = w.ratingCount;
-      out.push(copy);
+  private async loadCloud(): Promise<void> {
+    if (this.loadingCloud) {
+      return;
     }
-    return out;
+    this.loadingCloud = true;
+    try {
+      const resp = await WallpaperApi.fetchPage(1, ApiConfig.PAGE_SIZE);
+      if (resp.ok && resp.data !== undefined && resp.data.items.length > 0) {
+        this.page = 1;
+        this.cloudItems = resp.data.items.slice();
+        this.mergeCloud();
+        AppStorage.setOrCreate<boolean>(StoreKeys.MORE, resp.data.hasMore);
+        AppStorage.setOrCreate<boolean>(StoreKeys.OFFLINE, false);
+        AppStorage.setOrCreate<boolean>(StoreKeys.FROM_CACHE, false);
+        AppStorage.setOrCreate<boolean>(StoreKeys.ERROR, false);
+        AppStorage.setOrCreate<string>(StoreKeys.ERROR_TEXT, '');
+      } else if (resp.ok && resp.data !== undefined && resp.data.items.length === 0) {
+        // 云端可达但后台还没有上架内容：保持内置兜底，不打扰用户
+        this.cloudItems = [];
+        AppStorage.setOrCreate<boolean>(StoreKeys.MORE, false);
+        AppStorage.setOrCreate<boolean>(StoreKeys.OFFLINE, true);
+        AppStorage.setOrCreate<boolean>(StoreKeys.FROM_CACHE, true);
+        AppStorage.setOrCreate<string>(StoreKeys.ERROR_TEXT, '云端暂无内容');
+      } else {
+        // 网络失败：保留本地兜底
+        AppStorage.setOrCreate<boolean>(StoreKeys.OFFLINE, true);
+        AppStorage.setOrCreate<boolean>(StoreKeys.FROM_CACHE, true);
+        AppStorage.setOrCreate<string>(StoreKeys.ERROR_TEXT, resp.code ?? 'NETWORK_ERROR');
+      }
+    } finally {
+      this.loadingCloud = false;
+    }
   }
 
-  /** 首屏加载具体流程 */
-  private async bootstrap(): Promise<Wallpaper[]> {
-    let first: Wallpaper[] = [];
-    try {
-      first = await CloudDBUtil.queryWallpaperPage(WallpaperStore.PAGE_SIZE, 0);
-    } catch (e) {
-      // 云服务不可用（无网/未配置）：标记离线态供页面提示与重试，绝不黑屏
-      console.error(`WallpaperStore cloud query failed, fallback to defaults: ${JSON.stringify(e)}`);
-      // 把真实错误码留下来，界面在离线提示条里展示（只连日志的话要开调试器才能看到）
-      const err: BusinessError = e as BusinessError;
-      AppStorage.setOrCreate<string>(StoreKeys.ERROR_TEXT,
-        `code=${err.code} ${err.message === undefined ? '' : err.message}`);
-      this.offline = true;
-      AppStorage.setOrCreate<boolean>(StoreKeys.OFFLINE, true);
-      AppStorage.setOrCreate<boolean>(StoreKeys.ERROR, true);
-      AppStorage.setOrCreate<boolean>(StoreKeys.MORE, false);
-      const shown: Wallpaper[] = AppStorage.get<Wallpaper[]>(StoreKeys.LIST) ?? [];
-      if (shown.length > 0) {
-        // 已有缓存可展示：保留缓存内容，只标记离线。
-        // 不要用内置数据把缓存"降级"掉——缓存里可能是更全的云端数据。
-        AppStorage.setOrCreate<boolean>(StoreKeys.FROM_CACHE, true);
-        return shown;
-      }
-      AppStorage.setOrCreate<boolean>(StoreKeys.FROM_CACHE, false);
-      AppStorage.setOrCreate<Wallpaper[]>(StoreKeys.LIST, DefaultWallpapers.ALL);
-      // 兜底数据也落盘：下次冷启动至少能秒开，而不是又黑屏一次
-      this.writeCache(DefaultWallpapers.ALL);
-      return DefaultWallpapers.ALL;
+  /** 确保首屏已加载（幂等；已有数据直接返回） */
+  async ensureLoaded(force: boolean = false): Promise<Wallpaper[]> {
+    const current: Wallpaper[] = AppStorage.get<Wallpaper[]>(StoreKeys.LIST) ?? [];
+    if (!force && current.length > 0) {
+      return current;
     }
-
-    this.offline = false;
-    AppStorage.setOrCreate<boolean>(StoreKeys.OFFLINE, false);
-
-    let page: Wallpaper[];
-    if (first.length === 0) {
-      // 空表：播种默认壁纸，后续分页以本地默认数据为准
-      try {
-        await CloudDBUtil.batchInsert(DefaultWallpapers.ALL);
-      } catch (e) {
-        console.error(`WallpaperStore seed defaults failed: ${JSON.stringify(e)}`);
-      }
-      this.seededLocal = DefaultWallpapers.ALL;
-      page = DefaultWallpapers.ALL.slice(0, WallpaperStore.PAGE_SIZE);
-    } else {
-      page = first;
-    }
-    this.cloudOffset = page.length;
-    // 满页才可能有下一页；不满页直接到底
-    AppStorage.setOrCreate<boolean>(StoreKeys.MORE, page.length === WallpaperStore.PAGE_SIZE);
-    AppStorage.setOrCreate<boolean>(StoreKeys.FROM_CACHE, false);
-    // 先按原始路径落盘缓存，再把链接解析好发布给界面（临时链接不落盘）
-    this.writeCache(page);
-    const shown: Wallpaper[] = await this.resolveUrls(page);
-    AppStorage.setOrCreate<Wallpaper[]>(StoreKeys.LIST, shown);
-    return shown;
+    this.start();
+    return AppStorage.get<Wallpaper[]>(StoreKeys.LIST) ?? [];
   }
 
   // ==================== 分页 ====================
 
   /**
-   * 加载下一页（上拉触发）：结果追加进 AppStorage 并按 id 去重。
-   * 没有更多/正在加载/离线时直接返回当前列表。
+   * 加载下一页（云端分页；已到末页/离线兜底时为空操作）
+   *
+   * 并发保护：isBusy() 时直接返回；追加时按 id 去重，失败置 ERROR（列表底部显示重试）。
    */
   async loadMore(): Promise<Wallpaper[]> {
-    const current: Wallpaper[] = AppStorage.get<Wallpaper[]>(StoreKeys.LIST) ?? [];
-    const more: boolean = AppStorage.get<boolean>(StoreKeys.MORE) ?? true;
-    if (this.loadingMore || !more || this.offline) {
-      return current;
+    const more: boolean = AppStorage.get<boolean>(StoreKeys.MORE) ?? false;
+    const offline: boolean = AppStorage.get<boolean>(StoreKeys.OFFLINE) ?? false;
+    if (!more || offline || this.isBusy() || this.loadingCloud) {
+      return AppStorage.get<Wallpaper[]>(StoreKeys.LIST) ?? [];
     }
-    this.loadingMore = true;
     AppStorage.setOrCreate<boolean>(StoreKeys.LOADING_MORE, true);
-    AppStorage.setOrCreate<boolean>(StoreKeys.ERROR, false);
     try {
-      let page: Wallpaper[];
-      if (this.seededLocal !== undefined) {
-        page = this.seededLocal.slice(this.cloudOffset, this.cloudOffset + WallpaperStore.PAGE_SIZE);
+      const resp = await WallpaperApi.fetchPage(this.page + 1, ApiConfig.PAGE_SIZE);
+      if (resp.ok && resp.data !== undefined) {
+        this.page = this.page + 1;
+        // 累计云端条目（按后端 serverId 去重，防重试重复），再统一合并发布
+        const seenServer: Set<number> = new Set<number>();
+        for (const w of this.cloudItems) {
+          if (w.serverId > 0) {
+            seenServer.add(w.serverId);
+          }
+        }
+        for (const w of resp.data.items) {
+          if (w.serverId > 0 && !seenServer.has(w.serverId)) {
+            seenServer.add(w.serverId);
+            this.cloudItems.push(w);
+          } else if (w.serverId <= 0) {
+            this.cloudItems.push(w);
+          }
+        }
+        this.mergeCloud();
+        AppStorage.setOrCreate<boolean>(StoreKeys.MORE, resp.data.hasMore);
+        AppStorage.setOrCreate<boolean>(StoreKeys.ERROR, false);
+        AppStorage.setOrCreate<string>(StoreKeys.ERROR_TEXT, '');
       } else {
-        page = await CloudDBUtil.queryWallpaperPage(WallpaperStore.PAGE_SIZE, this.cloudOffset);
+        // 分页失败：保持 MORE=true（不锁死），列表底部给重试入口
+        AppStorage.setOrCreate<boolean>(StoreKeys.ERROR, true);
+        AppStorage.setOrCreate<string>(StoreKeys.ERROR_TEXT, resp.code ?? 'NETWORK_ERROR');
       }
-      // 只有"服务端明确返回不满一页"才认为到底
-      if (page.length < WallpaperStore.PAGE_SIZE) {
-        AppStorage.setOrCreate<boolean>(StoreKeys.MORE, false);
-      }
-      this.cloudOffset += page.length;
-      const merged: Wallpaper[] = WallpaperStore.mergeDedup(current, page);
-      // 已解析过的 http 链接会原样返回，只有新来的路径需要签发临时链接
-      const resolved: Wallpaper[] = await this.resolveUrls(merged);
-      AppStorage.setOrCreate<Wallpaper[]>(StoreKeys.LIST, resolved);
-      return resolved;
-    } catch (e) {
-      // 关键修复：分页失败**不能**把 MORE 置 false。
-      // 此前这里一旦失败就永久到底，用户恢复网络也无法继续翻页，只能杀进程重启。
-      // 这里只暴露 ERROR 状态，由页面给出"点击重试"。
-      console.error(`WallpaperStore loadMore failed: ${JSON.stringify(e)}`);
-      AppStorage.setOrCreate<boolean>(StoreKeys.ERROR, true);
-      return current;
     } finally {
-      this.loadingMore = false;
       AppStorage.setOrCreate<boolean>(StoreKeys.LOADING_MORE, false);
     }
+    return AppStorage.get<Wallpaper[]>(StoreKeys.LIST) ?? [];
   }
 
   /**
-   * 失败重试入口（页面"点击重试"统一调这里）
-   *  - 无数据（首屏失败）→ 重拉首屏
-   *  - 离线兜底态 → 重新尝试连云端，成功则替换为云端数据
-   *  - 已有数据（分页失败）→ 重试下一页
+   * 重试入口（页面"点击重试"统一调这里）
+   * 离线兜底 → 重新尝试云端首屏；分页失败 → 重新加载下一页。
    */
   retry(): void {
-    AppStorage.setOrCreate<boolean>(StoreKeys.ERROR, false);
-    const current: Wallpaper[] = AppStorage.get<Wallpaper[]>(StoreKeys.LIST) ?? [];
-    if (current.length === 0 || this.offline) {
-      this.offline = false;
-      AppStorage.setOrCreate<boolean>(StoreKeys.OFFLINE, false);
-      this.ensureLoaded(true);
+    const offline: boolean = AppStorage.get<boolean>(StoreKeys.OFFLINE) ?? false;
+    if (offline) {
+      this.loadCloud();
       return;
     }
     this.loadMore();
   }
 
-  /** 按 id 去重合并（换新数组引用，确保 @StorageProp 一定能刷到） */
-  private static mergeDedup(current: Wallpaper[], page: Wallpaper[]): Wallpaper[] {
-    const known: Set<string> = new Set<string>();
-    for (const w of current) {
-      known.add(w.id);
-    }
-    const merged: Wallpaper[] = current.slice();
-    for (const w of page) {
-      if (!known.has(w.id)) {
-        merged.push(w);
-      }
-    }
-    return merged;
-  }
-
-  // ==================== 本地缓存 ====================
-
-  /** 读缓存（同步；失败/无缓存返回空数组，调用方自行决定是否显示骨架屏） */
-  private readCache(): Wallpaper[] {
-    if (!PreferenceUtil.isReady()) {
-      return [];
-    }
-    const raw: string = PreferenceUtil.getString(WallpaperStore.KEY_CACHE, '');
-    if (raw.length === 0) {
-      return [];
-    }
-    try {
-      const dtos: WallpaperDTO[] = JSON.parse(raw) as WallpaperDTO[];
-      const out: Wallpaper[] = [];
-      for (const d of dtos) {
-        // 必须是真正的 Wallpaper 实例：tagList / avgRating 是原型 getter
-        const w: Wallpaper = new Wallpaper(d.id, d.title, d.imageUrl, d.thumbnailUrl,
-          d.category, d.author, d.uploadTime, d.tags);
-        // 构造器不含评分字段，单独补回
-        w.ratingSum = d.ratingSum;
-        w.ratingCount = d.ratingCount;
-        out.push(w);
-      }
-      return out;
-    } catch (e) {
-      console.error(`WallpaperStore readCache failed: ${JSON.stringify(e)}`);
-      return [];
-    }
-  }
-
-  /** 写缓存：只存首屏一页，控制 Preferences value 体积 */
-  private writeCache(list: Wallpaper[]): void {
-    if (!PreferenceUtil.isReady() || list.length === 0) {
-      return;
-    }
-    const dtos: WallpaperDTO[] = [];
-    const n: number = Math.min(list.length, WallpaperStore.CACHE_MAX);
-    for (let i = 0; i < n; i++) {
-      const w: Wallpaper = list[i];
-      const dto: WallpaperDTO = {
-        id: w.id,
-        title: w.title,
-        imageUrl: w.imageUrl,
-        thumbnailUrl: w.thumbnailUrl,
-        category: w.category,
-        author: w.author,
-        uploadTime: w.uploadTime,
-        tags: w.tags,
-        ratingSum: w.ratingSum,
-        ratingCount: w.ratingCount
-      };
-      dtos.push(dto);
-    }
-    PreferenceUtil.setString(WallpaperStore.KEY_CACHE, JSON.stringify(dtos));
-  }
-
-  // ==================== 状态查询（兼容旧调用；页面优先订阅 AppStorage 键） ====================
+  // ==================== 缓存清理 ====================
 
   /**
-   * 清除本地壁纸缓存（"清除缓存"入口调用）
+   * 清除本地缓存（"清除缓存"入口调用）
    *
-   * 只清缓存文件，**不动收藏**等用户资产（收藏是用户数据，清理缓存不该顺手删掉）。
-   * 清完后当前内存列表保持不变，界面不会突然变空；下次冷启动才会重新拉取。
+   * 这里只清理旧版本残留的缓存键，**不动收藏**等用户资产
+   * （收藏是用户数据，清理缓存不该顺手删掉）。
    */
   static clearCache(): void {
-    PreferenceUtil.remove(WallpaperStore.KEY_CACHE);
+    if (PreferenceUtil.isReady()) {
+      PreferenceUtil.remove(WallpaperStore.KEY_CACHE_LEGACY);
+    }
   }
+
+  // ==================== 状态查询 ====================
 
   /** 是否还有更多 */
   hasMore(): boolean {
-    return AppStorage.get<boolean>(StoreKeys.MORE) ?? true;
+    return AppStorage.get<boolean>(StoreKeys.MORE) ?? false;
   }
+
   /** 首屏或分页是否正在请求 */
   isBusy(): boolean {
     const loading: boolean = AppStorage.get<boolean>(StoreKeys.LOADING) ?? false;

@@ -1,12 +1,15 @@
 import preferences from '@ohos.data.preferences';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@ohos.base';
+import { Wallpaper } from '../../model/Wallpaper';
 
 /**
  * PreferenceUtil —— 本地收藏工具
  *
  * 职责（全部本地持久化，无需登录）：
  *  收藏：把"收藏的壁纸 ID 列表"存为 JSON 字符串数组，如 ["w1","w2"]
+ *  收藏快照：收藏时顺手存下壁纸对象（JSON），「最爱收藏」展示时
+ *   目录里找不到的（云端分页未拉到的图）用快照兜底展示
  *
  * 使用前必须调用 init() 传入上下文（推荐在 Index 页面 aboutToAppear 里调用）：
  *   PreferenceUtil.init(getContext(this));
@@ -14,6 +17,8 @@ import { BusinessError } from '@ohos.base';
 export class PreferenceUtil {
   /** 收藏列表存储键 */
   private static readonly KEY_FAVORITES: string = 'favorite_wallpaper_ids';
+  /** 收藏快照存储键（收藏时记录的壁纸对象，数组按收藏时间倒序） */
+  private static readonly KEY_FAV_ITEMS: string = 'favorite_items_v1';
   /**
    * 收藏在 AppStorage 中的镜像键（跨 Tab 单一数据源）
    *
@@ -120,6 +125,94 @@ export class PreferenceUtil {
     // 广播：所有订阅了 favoriteIds 的页面/组件立即同步（跨 Tab 一致）
     PreferenceUtil.publishFavorites();
     return added;
+  }
+
+  /**
+   * 切换收藏（带快照登记，收藏入口统一用这个）
+   *
+   * 1. 快照：收藏时把壁纸对象存进 KEY_FAV_ITEMS，「最爱收藏」展示时
+   *    该壁纸不在目录（云端分页没拉到）也能显示；
+   * 2. 别名归一：历史版本从合辑详情收藏的云端壁纸记的是 `c_<serverId>`，
+   *    而目录接口里同一张图的 id 是 description 里的本地 id —— 切换时把
+   *    两种记录视为同一条，避免出现"取消不掉/重复收藏"。
+   */
+  static toggleFavoriteItem(id: string, item?: Wallpaper): boolean {
+    // 云端壁纸的别名 id（仅当与主 id 不同时才需要归一）
+    let alias: string = '';
+    if (item !== undefined && item.serverId > 0) {
+      const a: string = `c_${item.serverId}`;
+      if (a !== id) {
+        alias = a;
+      }
+    }
+    const ids: string[] = PreferenceUtil.favorites().slice();
+    const hadId: boolean = ids.indexOf(id) >= 0;
+    const hadAlias: boolean = alias.length > 0 && ids.indexOf(alias) >= 0;
+    const added: boolean = !hadId && !hadAlias;
+    // 清掉主 id 与别名（幂等），再按目标状态写入主 id
+    const next: string[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      const x: string = ids[i];
+      if (x !== id && x !== alias) {
+        next.push(x);
+      }
+    }
+    if (added) {
+      next.push(id);
+    }
+    PreferenceUtil.favCache = next;
+    PreferenceUtil.write(PreferenceUtil.KEY_FAVORITES, JSON.stringify(next));
+    PreferenceUtil.publishFavorites();
+
+    // 快照登记：移除 id/alias 的旧快照，收藏时把当前对象记到最前
+    const snaps: Wallpaper[] = PreferenceUtil.getFavoriteItems();
+    const kept: Wallpaper[] = [];
+    for (let i = 0; i < snaps.length; i++) {
+      const w: Wallpaper = snaps[i];
+      if (w.id !== id && (alias.length === 0 || w.id !== alias)) {
+        kept.push(w);
+      }
+    }
+    if (added && item !== undefined) {
+      kept.unshift(item);
+    }
+    PreferenceUtil.setString(PreferenceUtil.KEY_FAV_ITEMS, JSON.stringify(kept));
+    return added;
+  }
+
+  /**
+   * 读取收藏快照（真实 Wallpaper 实例数组；JSON 解析失败/字段异常逐条跳过）
+   * 必须重建实例而不是强转：普通对象没有类原型，ImagePreview 里的 getter 会炸。
+   */
+  static getFavoriteItems(): Wallpaper[] {
+    const raw: string = PreferenceUtil.getString(PreferenceUtil.KEY_FAV_ITEMS, '[]');
+    try {
+      const arr: Wallpaper[] = JSON.parse(raw) as Wallpaper[];
+      const out: Wallpaper[] = [];
+      for (let i = 0; i < arr.length; i++) {
+        const o: Wallpaper | null = arr[i] ?? null;
+        if (o === null || typeof o.id !== 'string' || o.id.length === 0) {
+          continue;
+        }
+        const w = new Wallpaper();
+        w.id = o.id;
+        w.title = typeof o.title === 'string' ? o.title : '';
+        w.category = typeof o.category === 'string' ? o.category : '';
+        w.dominantColor = typeof o.dominantColor === 'string' ? o.dominantColor : '';
+        w.author = typeof o.author === 'string' ? o.author : '';
+        w.tags = typeof o.tags === 'string' ? o.tags : '';
+        w.imageUrl = typeof o.imageUrl === 'string' ? o.imageUrl : '';
+        w.thumbUrl = typeof o.thumbUrl === 'string' ? o.thumbUrl : '';
+        w.uploadTime = typeof o.uploadTime === 'number' ? o.uploadTime : 0;
+        w.serverId = typeof o.serverId === 'number' ? o.serverId : -1;
+        w.ratingSum = typeof o.ratingSum === 'number' ? o.ratingSum : 0;
+        w.ratingCount = typeof o.ratingCount === 'number' ? o.ratingCount : 0;
+        out.push(w);
+      }
+      return out;
+    } catch (e) {
+      return [];
+    }
   }
 
   /** 获取收藏数量 */

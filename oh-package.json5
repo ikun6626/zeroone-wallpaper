@@ -2,8 +2,10 @@
   "modelVersion": "6.1.1",
   "description": "Please describe the basic information.",
   "dependencies": {
-    // 说明：云服务（云数据库/云存储）改用 HarmonyOS SDK 自带的 Cloud Foundation Kit
-    // （import { cloudDatabase } from '@kit.CloudFoundationKit'），无需安装任何三方包。
+    // 说明：本工程为**全离线**应用，壁纸与素材全部随安装包内置
+    // （resources/base/media 下的 wp_*.jpg），运行时不访问网络、不依赖任何云服务。
+    // 因此这里没有任何运行时依赖：既不需要 Cloud Foundation Kit，
+    // 也不需要 @hw-agconnect/... 之类的三方包。
     // 若此前执行过 ohpm install @hw-agconnect/...，可执行
     //   ohpm uninstall @hw-agconnect/hmcore @hw-agconnect/cloud
     // 清理多余的包（不清理也能编译，只是多了无用依赖）。

@@ -1,12 +1,12 @@
-import { image } from '@kit.ImageKit';
+﻿﻿﻿﻿﻿﻿﻿import { image } from '@kit.ImageKit';
 import { promptAction } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
-import request from '@ohos.request';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { taskpool } from '@kit.ArkTS';
 import { Wallpaper } from '../../model/Wallpaper';
 import { runFilterTask, runTextureTask } from '../editor/FilterTask';
+import { runPerspectiveTask } from '../editor/PerspectiveTask';
 import { toggleFilter, toggleTexture, NO_FILTER, NO_TEXTURE } from '../editor/FilterPipeline';
 import { TextItem, StickerItem, HandleBase, DispRect, CropRect } from '../editor/EditorModels';
 import {
@@ -25,8 +25,8 @@ import {
   cropRatioValue,
   CropView,
   CropDrawTransform,
-  cropDrawTransform,
-  unprojectCrop
+  cropComposeTransform,
+  autoCropScale
 } from '../editor/CropGeometry';
 import {
   toAnchor,
@@ -42,6 +42,27 @@ import { CanvasSpec } from '../canvas/CanvasSpec';
 import { EditGuard } from '../utils/EditGuard';
 import { EditorCanvasModel, ObservableCanvasState } from '../editor/EditorCanvasModel';
 import { CanvasView } from './CanvasView';
+import { ImageCache } from '../net/ImageCache';
+import { Haptics } from '../utils/Haptics';
+
+/**
+ * 线性混合（UI 线程内联版）：out = base + (filt − base)·k
+ *
+ * 为什么不再走 TaskPool：混合是"每像素一次乘加"的纯线性运算，本身很便宜；
+ * 真正贵的是 taskpool 每次往返搬运 ~10MB×2 缓冲（实测每次 3~4s）。
+ * 内联后单帧只需一次内存遍历，滑杆拖动才能实时跟手。
+ */
+function mixLinear(base: ArrayBuffer, filt: ArrayBuffer, k: number): ArrayBuffer {
+  const b: Uint8Array = new Uint8Array(base);
+  const f: Uint8Array = new Uint8Array(filt);
+  const n: number = f.byteLength;
+  const out: Uint8Array = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const v: number = b[i] + (f[i] - b[i]) * k;
+    out[i] = v < 0 ? 0 : (v > 255 ? 255 : v) | 0;
+  }
+  return out.buffer as ArrayBuffer;
+}
 
 /**
  * 位图副本（"让 Image 重绘"的唯一手段：换个 PixelMap 句柄，框架才会重新取图）
@@ -63,6 +84,25 @@ async function clonePixelMap(pm: image.PixelMap): Promise<image.PixelMap> {
     editable: true
   };
   return image.createPixelMap(bytes, opts);
+}
+
+/**
+ * 历史快照条目（撤销/重做栈元素）
+ *
+ * 底图不存 RGBA 原图（8MB×12 ≈ 96MB 太贵），存质量 88 的 JPEG（约 300-600KB），
+ * 恢复时重新解码；图层元素全部深拷贝（贴纸 content 只是路径字符串，可直接复制）。
+ */
+interface HistoryEntry {
+  jpeg: ArrayBuffer;
+  imageW: number;
+  imageH: number;
+  filterName: string;
+  textureName: string;
+  textureStrength: number;
+  filterIntensity: number;
+  fitMode: string;
+  texts: TextItem[];
+  stickers: StickerItem[];
 }
 
 /**
@@ -137,13 +177,20 @@ export struct ImageEditor {
   private backId: number = -1;
   @State loading: boolean = true;
   @State saving: boolean = false;
-  /** 滤镜/纹理后台处理中（TaskPool） */
+  /** 滤镜/纹理后台处理中（TaskPool）；同时作为"丢弃中间帧"的并发闸门 */
   @State processing: boolean = false;
+  /**
+   * 是否显示"处理中"遮罩。只在真正耗时的重算（滤镜/纹理首次满档计算、几何/裁剪）时显示；
+   * 拖强度滑杆只跑几十毫秒的 mix，若也遮罩会盖住预览 → 用户看不见实时变化（误以为"没反应"）。
+   */
+  @State showBusy: boolean = false;
 
   /** 当前工具页 */
   @State tool: string = 'transform';
   /** 当前滤镜 */
   @State filterName: string = '原图';
+  /** 当前滤镜强度（0-100；100=满档；仅在选中滤镜时可调） */
+  @State filterIntensity: number = 100;
   /** 当前纹理与强度 */
   @State textureName: string = '';
   @State textureStrength: number = 70;
@@ -153,6 +200,39 @@ export struct ImageEditor {
   @State textStyle: number = 0;
   /** 我的抠图贴纸（文件路径） */
   @State userStickers: string[] = [];
+  /** 底部工具面板是否收起（收起后预览区最大化，点工具 chip 自动展开） */
+  @State panelCollapsed: boolean = false;
+  /** 预设文案分段：0=主题文字，1=励志语录 */
+  @State phraseTab: number = 0;
+  /** 裁剪面板内"微调"区是否展开（拉直/水平/垂直，默认收起：先裁剪再微调） */
+  @State cropAdjustExpanded: boolean = false;
+
+  // ===== 撤销/重做（S2）=====
+  private undoStack: HistoryEntry[] = [];
+  private redoStack: HistoryEntry[] = [];
+  /** 栈上限（JPEG 快照，约 0.5MB/步） */
+  private readonly HISTORY_MAX: number = 12;
+  @State canUndo: boolean = false;
+  @State canRedo: boolean = false;
+  /**
+   * 历史操作串行闸门：「快照捕获 → 动作执行」必须原子，
+   * 否则快速连点时快照可能捕获到上一个动作完成后的状态，历史错乱。
+   */
+  private histGate: Promise<void> = Promise.resolve();
+  /** 满档滤镜结果缓存（强度滑杆只跑 mix，不重算滤镜） */
+  private filterFullBytes: ArrayBuffer | undefined = undefined;
+  private filterFullName: string = '';
+  /** 满档纹理结果缓存（强度滑杆只跑 mix，不重算纹理） */
+  private textureFullBytes: ArrayBuffer | undefined = undefined;
+  private textureFullName: string = '';
+  /** 满档纹理对应的"输入阶段"指纹（=baseVersion|滤镜名|滤镜强度），变了就作废 */
+  private textureFullKey: string = '';
+  /** 底图像素缓存（底图只在几何变换/重载后变化，拖滑杆时无需重复读 8MB） */
+  private baseBytesCache: ArrayBuffer | undefined = undefined;
+  /** 底图版本号：每次几何烘焙/重载/恢复自增，用于纹理缓存失效判定 */
+  private baseVersion: number = 0;
+  /** 处理中被丢弃的强度刷新帧，完成后补一次最终值 */
+  private intensityPending: boolean = false;
 
   /** 裁剪态图片拖拽基准 */
   private cropPanBaseX: number = 0;
@@ -238,32 +318,19 @@ export struct ImageEditor {
     this.loading = true;
     const ctx: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
     try {
+      // 底图来源：云端壁纸（即使有随包兜底图）取高清原图；纯本地壁纸读随包资源。
       let data: ArrayBuffer;
-      if (this.localImg !== undefined) {
+      if (this.wallpaper.isCloud) {
+        // 走三级缓存：浏览过的图再编辑零流量、断网可编辑（init 幂等防御入口遗漏）
+        ImageCache.init(ctx);
+        data = await ImageCache.fetchBytes(
+          (this.wallpaper.imageUrl.length > 0)
+            ? this.wallpaper.imageUrl : this.wallpaper.thumbUrl);
+      } else if (this.localImg !== undefined) {
         const content: Uint8Array = await ctx.resourceManager.getMediaContent(this.localImg);
         data = content.buffer as ArrayBuffer;
       } else {
-        const dest: string = `${ctx.filesDir}/zeroone_edit_${Date.now()}.jpg`;
-        const task: request.DownloadTask = await request.downloadFile(ctx, {
-          'url': this.wallpaper.imageUrl,
-          'filePath': dest
-        });
-        await new Promise<void>((resolve, reject) => {
-          task.on('complete', () => {
-            resolve();
-          });
-          task.on('fail', () => {
-            reject(new Error('download failed'));
-          });
-        });
-        const f = fileIo.openSync(dest, fileIo.OpenMode.READ_ONLY);
-        const size: number = fileIo.statSync(dest).size;
-        const buf: ArrayBuffer = new ArrayBuffer(size);
-        fileIo.readSync(f.fd, buf);
-        fileIo.closeSync(f);
-        data = buf;
-        // 像素已读入内存，立即删除下载临时文件
-        this.safeUnlink(dest);
+        return;
       }
       const src: image.ImageSource = image.createImageSource(data);
       const pm: image.PixelMap = await src.createPixelMap({ editable: true });
@@ -279,7 +346,9 @@ export struct ImageEditor {
       // 解码结果就是"几何基准"：滤镜/纹理都从它重算（重载即复位滤镜链）
       this.basePixelMap = this.baseScope.setCurrent(await this.toEditableRgba(pm));
       this.filterName = NO_FILTER;
+      this.filterIntensity = 100;
       this.textureName = NO_TEXTURE;
+      this.invalidateProcessCaches();
       await this.refreshFromBase(false);
     } catch (e) {
       console.error(`loadOriginal failed: ${JSON.stringify(e)}`);
@@ -292,9 +361,13 @@ export struct ImageEditor {
   /**
    * 从底图重新推导"显示位图"：底图 → 滤镜 → 纹理
    *
-   * - 滤镜链为空时只做一份副本：Image 组件要换到新的 PixelMap 句柄才会重绘；
-   * - 有滤镜/纹理时按顺序重跑（先滤镜后纹理，与旧行为一致），结果恒为 RGBA_8888；
-   * - 所有"换滤镜/换纹理/旋转/翻转/裁剪"都走这里，保证画面永远等于"底图 + 当前滤镜链"。
+   * 管线：`stage = 底图经滤镜(强度 kf)`；`画面 = stage 经纹理(强度 kt)`。
+   *  - 滤镜/纹理各有"满档(k=1)结果缓存"，拖动强度滑杆只做一次 UI 线程内联线性混合
+   *    `mixLinear`（一次内存遍历，毫秒级），不再每次全量重算；
+   *  - **满档缓存只读**：TaskPool 任务都改成"只读输入、写独立输出"，
+   *    且入参一律传一次性副本（TaskPool 会转移 ArrayBuffer 所有权，直接传缓存会
+   *    让缓存失效 → `TypeError: IsDetachedBuffer`），因此缓存永不被写坏或吞掉；
+   *  - 纹理缓存的"输入阶段指纹" = baseVersion|滤镜名|滤镜强度：任一项变化即重算。
    *
    * @param markEdit 是否算一次未保存修改（几何/滤镜操作 true；加载/重置 false）
    */
@@ -311,28 +384,74 @@ export struct ImageEditor {
       } else {
         this.processing = true;
         try {
-          let bytes: ArrayBuffer = new ArrayBuffer(base.getPixelBytesNumber());
-          await base.readPixelsToBuffer(bytes);
+          // ===== 1) 底图 →(滤镜)→ stage =====
+          let stage: ArrayBuffer;
           if (this.filterName !== NO_FILTER) {
-            const filtered: object = await taskpool.execute(runFilterTask, bytes, w, h, this.filterName);
-            bytes = filtered as ArrayBuffer;
+            const kf: number = this.filterIntensity / 100;
+            const needBuild: boolean = this.filterFullBytes === undefined
+              || this.filterFullName !== this.filterName;
+            if (!needBuild && kf >= 1) {
+              // 满档 + 缓存命中：连底图都不用读
+              stage = this.filterFullBytes as ArrayBuffer;
+            } else {
+              const baseBytes: ArrayBuffer = await this.readBaseBytes();
+              if (needBuild) {
+                this.showBusy = true;
+                // TaskPool 默认「转移」ArrayBuffer 所有权：入参在调用后即失效（IsDetachedBuffer）。
+                // 因此传入的必须是**一次性副本**，绝不能把还要复用的缓存缓冲交出去。
+                const full: object = await taskpool.execute(runFilterTask, baseBytes.slice(0),
+                  w, h, this.filterName);
+                this.filterFullBytes = full as ArrayBuffer;
+                this.filterFullName = this.filterName;
+              }
+              const filt: ArrayBuffer = this.filterFullBytes as ArrayBuffer;
+              if (kf >= 1) {
+                stage = filt;
+              } else {
+                stage = mixLinear(baseBytes, filt, kf);
+              }
+            }
+          } else {
+            stage = await this.readBaseBytes();
           }
+
+          // ===== 2) stage →(纹理)→ 画面 =====
+          let bytes: ArrayBuffer = stage;
           if (this.textureName !== NO_TEXTURE) {
-            const textured: object = await taskpool.execute(runTextureTask, bytes, w, h,
-              this.textureName, this.textureStrength);
-            bytes = textured as ArrayBuffer;
+            const key: string = `${this.baseVersion}|${this.filterName}|${this.filterIntensity}`;
+            if (this.textureFullBytes === undefined || this.textureFullName !== this.textureName
+              || this.textureFullKey !== key) {
+              this.showBusy = true;
+              const full: object = await taskpool.execute(runTextureTask, stage.slice(0), w, h,
+                this.textureName, 100);
+              this.textureFullBytes = full as ArrayBuffer;
+              this.textureFullName = this.textureName;
+              this.textureFullKey = key;
+            }
+            const kt: number = this.textureStrength / 100;
+            const tex: ArrayBuffer = this.textureFullBytes as ArrayBuffer;
+            if (kt >= 1) {
+              bytes = tex;
+            } else {
+              bytes = mixLinear(stage, tex, kt);
+            }
           }
           // commitBytes 内部会 setCurrent + 标脏
           await this.commitBytes(bytes);
         } finally {
           this.processing = false;
+          this.showBusy = false;
+          // 处理期间被丢弃的滑杆帧：补刷一次最终值
+          if (this.intensityPending) {
+            this.intensityPending = false;
+            this.refreshFromBase(markEdit);
+          }
         }
       }
       if (markEdit) {
         this.dirty = true;
       }
     } catch (e) {
-      console.error(`refreshFromBase failed: ${JSON.stringify(e)}`);
       promptAction.showToast({ message: '图片处理失败，请重试' });
     }
   }
@@ -366,34 +485,102 @@ export struct ImageEditor {
     this.dirty = true;
   }
 
-  async rotateImage(angle: number): Promise<void> {
-    // 几何烘焙进**底图**，滤镜/纹理随后从底图重算（旋转不会丢滤镜，也不会叠色）
+  /**
+   * 旋转入口（两处分发）：
+   *  - 裁剪态：框不动、图转（iOS 式），只改 cropAngle + 自动放大保证覆盖；
+   *  - 非裁剪态：几何烘焙进底图，走历史栈。
+   */
+  rotateImage(angle: number): void {
+    if (this.model.canvas.cropVisible) {
+      this.cropRotate(angle);
+      return;
+    }
+    this.withHistory((): Promise<void> => this.doRotateImage(angle));
+  }
+
+  /** 非裁剪态：几何烘焙进底图，滤镜/纹理随后从底图重算（不丢滤镜、不叠色） */
+  private async doRotateImage(angle: number): Promise<void> {
+    const oldW: number = this.model.canvas.imageW;
+    const oldH: number = this.model.canvas.imageH;
+    const dispOld: DispRect = this.dispRect();
     const base: image.PixelMap | undefined = this.basePixelMap;
     if (base === undefined) {
       return;
     }
-    const oldW: number = this.model.canvas.imageW;
-    const oldH: number = this.model.canvas.imageH;
-    const dispOld: DispRect = this.dispRect();
     await base.rotate(angle);
     const tmp: number = this.model.canvas.imageW;
     this.model.canvas.imageW = this.model.canvas.imageH;
     this.model.canvas.imageH = tmp;
+    this.invalidateProcessCaches();
     // 文字/贴纸锚点随画面旋转（旋转后尺寸互换）
     this.remapOverlays((p: LayerPoint): LayerPoint => mapRotate(p, angle, oldW, oldH),
       dispOld, oldH, oldW);
     await this.refreshFromBase(true);
   }
 
-  async flip(horizontal: boolean, vertical: boolean): Promise<void> {
+  /**
+   * 裁剪态 90° 旋转：选区框固定，图片绕预览中心旋转。
+   * 竖图转 90 后必然露黑 → autoCropScale 计算最小放大系数并取 max（不回缩）。
+   */
+  private cropRotate(angle: number): void {
+    const delta: number = angle === 90 ? 90 : -90;
+    this.model.canvas.cropAngle = this.normalizeAngle180(this.model.canvas.cropAngle + delta);
+    this.ensureCropCover();
+    this.dirty = true;
+    Haptics.light();
+  }
+
+  /** 角度归一化到 (-180, 180] */
+  private normalizeAngle180(a: number): number {
+    let n: number = a;
+    while (n > 180) {
+      n -= 360;
+    }
+    while (n <= -180) {
+      n += 360;
+    }
+    return n;
+  }
+
+  /**
+   * 旋转/拉直后保证图片覆盖预览区：
+   * 旋转后图片 AABB 可能盖不住，按 autoCropScale 自动放大（与 iOS 照片一致）。
+   */
+  private ensureCropCover(): void {
+    const view: CropView = this.model.canvas.cropView();
+    const need: number = autoCropScale(view, this.model.canvas.previewW,
+      this.model.canvas.previewH);
+    if (need > this.model.canvas.cropScale) {
+      this.model.canvas.cropScale = need;
+    }
+  }
+
+  /** 翻转入口：裁剪态改镜像标志；非裁剪态烘焙底图走历史栈 */
+  flip(horizontal: boolean, vertical: boolean): void {
+    if (this.model.canvas.cropVisible) {
+      if (horizontal) {
+        this.model.canvas.cropFlipH = !this.model.canvas.cropFlipH;
+      }
+      if (vertical) {
+        this.model.canvas.cropFlipV = !this.model.canvas.cropFlipV;
+      }
+      this.dirty = true;
+      Haptics.light();
+      return;
+    }
+    this.withHistory((): Promise<void> => this.doFlip(horizontal, vertical));
+  }
+
+  private async doFlip(horizontal: boolean, vertical: boolean): Promise<void> {
+    const oldW: number = this.model.canvas.imageW;
+    const oldH: number = this.model.canvas.imageH;
+    const dispOld: DispRect = this.dispRect();
     const base: image.PixelMap | undefined = this.basePixelMap;
     if (base === undefined) {
       return;
     }
-    const oldW: number = this.model.canvas.imageW;
-    const oldH: number = this.model.canvas.imageH;
-    const dispOld: DispRect = this.dispRect();
     await base.flip(horizontal, vertical);
+    this.invalidateProcessCaches();
     // 翻转不改尺寸，图层只做镜像
     this.remapOverlays((p: LayerPoint): LayerPoint => mapFlip(p, horizontal, vertical, oldW, oldH),
       dispOld, oldW, oldH);
@@ -448,6 +635,241 @@ export struct ImageEditor {
     this.loadOriginal();
   }
 
+  // ==================== 撤销 / 重做（S2） ====================
+
+  /**
+   * 处理缓存整体失效（底图像素/几何烘焙/裁剪/重载/撤销恢复后调用）。
+   *  - 滤镜/纹理满档缓存、底图字节缓存都不再对应当前底图；
+   *  - 同时自增 baseVersion，使纹理缓存的"输入阶段指纹"失配。
+   */
+  private invalidateProcessCaches(): void {
+    this.filterFullBytes = undefined;
+    this.filterFullName = '';
+    this.textureFullBytes = undefined;
+    this.textureFullName = '';
+    this.textureFullKey = '';
+    this.baseBytesCache = undefined;
+    this.baseVersion++;
+  }
+
+  /**
+   * 读底图像素到独立缓冲（base 随后被替换/释放也不影响）
+   *
+   * 结果会缓存（底图只在几何变换后变化）。两类保证：
+   *  1. 行跨距对齐：`readPixelsToBuffer` 按 getBytesNumberPerRow 给出每行字节数，
+   *     若大于 width*4（解码器为 SIMD 对齐做填充），必须逐行压紧，
+   *     否则下游按 (y*w+x)*4 索引会整体错位 → 保存后花屏；
+   *  2. 三个 TaskPool 任务都改成只读输入，因此这里可以安全返回同一个缓存缓冲
+   *     给滤镜/混合/纹理共享，无需每帧拷贝。
+   */
+  private async readBaseBytes(): Promise<ArrayBuffer> {
+    if (this.baseBytesCache !== undefined) {
+      return this.baseBytesCache;
+    }
+    const base: image.PixelMap | undefined = this.basePixelMap;
+    if (base === undefined) {
+      throw new Error('base pixelmap missing');
+    }
+    const info = base.getImageInfoSync();
+    const w: number = info.size.width;
+    const h: number = info.size.height;
+    const tightRow: number = w * 4;
+    const rowBytes: number = base.getBytesNumberPerRow();
+    const raw: ArrayBuffer = new ArrayBuffer(base.getPixelBytesNumber());
+    await base.readPixelsToBuffer(raw);
+    let tight: ArrayBuffer;
+    if (rowBytes === tightRow) {
+      tight = raw.byteLength === tightRow * h ? raw : raw.slice(0, tightRow * h);
+    } else {
+      const srcBuf: Uint8Array = new Uint8Array(raw);
+      const outBuf: Uint8Array = new Uint8Array(tightRow * h);
+      for (let y = 0; y < h; y++) {
+        outBuf.set(srcBuf.subarray(y * rowBytes, y * rowBytes + tightRow), y * tightRow);
+      }
+      tight = outBuf.buffer as ArrayBuffer;
+    }
+    this.baseBytesCache = tight;
+    return tight;
+  }
+
+  /** RGBA 字节打包成 JPEG（ImageKit 硬编，约 50-100ms） */
+  private async packJpeg(bytes: ArrayBuffer, w: number, h: number): Promise<ArrayBuffer> {
+    const opts: image.InitializationOptions = {
+      size: { width: w, height: h },
+      srcPixelFormat: image.PixelMapFormat.RGBA_8888,
+      pixelFormat: image.PixelMapFormat.RGBA_8888
+    };
+    const pm: image.PixelMap = await image.createPixelMap(bytes, opts);
+    const packer: image.ImagePacker = image.createImagePacker();
+    try {
+      return await packer.packing(pm, { format: 'image/jpeg', quality: 88 });
+    } finally {
+      try {
+        packer.release();
+      } catch (e) {
+        // 忽略
+      }
+      PixelScope.safeRelease(pm);
+    }
+  }
+
+  /** 文字图层深拷贝 */
+  private copyTexts(src: TextItem[]): TextItem[] {
+    const out: TextItem[] = [];
+    for (let i = 0; i < src.length; i++) {
+      const t: TextItem = src[i];
+      out.push({ content: t.content, color: t.color, x: t.x, y: t.y, scale: t.scale, style: t.style });
+    }
+    return out;
+  }
+
+  /** 贴纸图层深拷贝（content 是路径字符串） */
+  private copyStickers(src: StickerItem[]): StickerItem[] {
+    const out: StickerItem[] = [];
+    for (let i = 0; i < src.length; i++) {
+      const s: StickerItem = src[i];
+      out.push({ content: s.content, x: s.x, y: s.y, scale: s.scale, angle: s.angle });
+    }
+    return out;
+  }
+
+  /** 捕获当前状态（只捕获、不入栈） */
+  private async captureEntry(): Promise<HistoryEntry> {
+    const w: number = this.model.canvas.imageW;
+    const h: number = this.model.canvas.imageH;
+    const rgba: ArrayBuffer = await this.readBaseBytes();
+    const jpeg: ArrayBuffer = await this.packJpeg(rgba, w, h);
+    return {
+      jpeg: jpeg,
+      imageW: w,
+      imageH: h,
+      filterName: this.filterName,
+      textureName: this.textureName,
+      textureStrength: this.textureStrength,
+      filterIntensity: this.filterIntensity,
+      fitMode: this.model.canvas.fitMode,
+      texts: this.copyTexts(this.model.layers.texts()),
+      stickers: this.copyStickers(this.model.layers.stickers())
+    };
+  }
+
+  /**
+   * 执行一个可撤销操作：串行闸门内「先快照 → 再动作」。
+   * 所有破坏性操作（旋转/翻转/裁剪/滤镜/纹理/图层增删）的唯一入口。
+   */
+  private withHistory(action: () => Promise<void>): void {
+    this.histGate = this.histGate.then(async (): Promise<void> => {
+      try {
+        const entry: HistoryEntry = await this.captureEntry();
+        this.undoStack.push(entry);
+        while (this.undoStack.length > this.HISTORY_MAX) {
+          this.undoStack.shift();
+        }
+        this.redoStack = [];
+        this.updateHistoryButtons();
+        await action();
+      } catch (e) {
+        console.error(`history action failed: ${JSON.stringify(e)}`);
+        promptAction.showToast({ message: '操作失败，请重试' });
+      }
+    });
+  }
+
+  /**
+   * 滑杆开始调节时入一次历史（一次拖动手势 = 一个撤销步）。
+   * 只挂「快照入栈」，动作（实时刷新）不经过闸门。
+   */
+  private beginSliderHistory(): void {
+    this.histGate = this.histGate.then(async (): Promise<void> => {
+      try {
+        const entry: HistoryEntry = await this.captureEntry();
+        this.undoStack.push(entry);
+        while (this.undoStack.length > this.HISTORY_MAX) {
+          this.undoStack.shift();
+        }
+        this.redoStack = [];
+        this.updateHistoryButtons();
+      } catch (e) {
+        console.error(`slider history failed: ${JSON.stringify(e)}`);
+      }
+    });
+  }
+
+  /** 恢复一个历史条目（jpeg 解码为底图 → 图层 → 滤镜状态 → 重算画面） */
+  private async restoreEntry(entry: HistoryEntry): Promise<void> {
+    // 1. JPEG → 可编辑 RGBA 底图
+    const src: image.ImageSource = image.createImageSource(entry.jpeg);
+    const pm: image.PixelMap = await src.createPixelMap({ editable: true });
+    try {
+      src.release();
+    } catch (e) {
+      // 忽略
+    }
+    this.basePixelMap = this.baseScope.setCurrent(await this.toEditableRgba(pm));
+    this.model.canvas.imageW = entry.imageW;
+    this.model.canvas.imageH = entry.imageH;
+    this.model.canvas.fitMode = entry.fitMode;
+    // 2. 图层整体恢复（元素由快照深拷贝，store 直接接管）
+    this.model.layers.restoreSnapshot(entry.texts, entry.stickers);
+    // 3. 滤镜链状态
+    this.filterName = entry.filterName;
+    this.filterIntensity = entry.filterIntensity;
+    this.textureName = entry.textureName;
+    this.textureStrength = entry.textureStrength;
+    this.invalidateProcessCaches();
+    // 4. 重算画面（非用户动作，不重复标脏）
+    await this.refreshFromBase(false);
+  }
+
+  /** 撤销 */
+  undo(): void {
+    if (!this.canUndo) {
+      return;
+    }
+    Haptics.light();
+    this.histGate = this.histGate.then(async (): Promise<void> => {
+      const entry: HistoryEntry | undefined = this.undoStack.pop();
+      if (entry === undefined) {
+        return;
+      }
+      const current: HistoryEntry = await this.captureEntry();
+      this.redoStack.push(current);
+      await this.restoreEntry(entry);
+      // 撤销栈空 = 回到本次编辑的初始态：关闭不再确认
+      if (this.undoStack.length === 0) {
+        this.dirty = false;
+        this.model.layers.markClean();
+      } else {
+        this.dirty = true;
+      }
+      this.updateHistoryButtons();
+    });
+  }
+
+  /** 重做 */
+  redo(): void {
+    if (!this.canRedo) {
+      return;
+    }
+    Haptics.light();
+    this.histGate = this.histGate.then(async (): Promise<void> => {
+      const entry: HistoryEntry | undefined = this.redoStack.pop();
+      if (entry === undefined) {
+        return;
+      }
+      const current: HistoryEntry = await this.captureEntry();
+      this.undoStack.push(current);
+      await this.restoreEntry(entry);
+      this.dirty = true;
+      this.updateHistoryButtons();
+    });
+  }
+
+  private updateHistoryButtons(): void {
+    this.canUndo = this.undoStack.length > 0;
+    this.canRedo = this.redoStack.length > 0;
+  }
+
   /** 裁剪专用重置：只重置裁剪参数，不影响滤镜/文字/贴纸 */
   resetCrop(): void {
     this.model.canvas.clearCrop();
@@ -494,6 +916,24 @@ export struct ImageEditor {
   /** 裁剪态：双指缩放图片（0.5~5 倍，与旧行为一致） */
   private onCropPinchUpdate(scale: number): void {
     this.model.canvas.cropScale = Math.max(0.5, Math.min(5, this.cropPinchBase * scale));
+  }
+
+  /**
+   * 拉直 / 水平 / 垂直校正滑杆（CanvasView 回报）
+   *  - straighten：直接驱动 cropAngle（与 90 按钮共用角度；动滑杆即放弃整圈部分），
+   *    并自动放大保证旋转后覆盖；
+   *  - perspectiveH/V：只改状态，applyCrop 确认时 PerspectiveTask 烘焙。
+   */
+  private onCropAdjust(kind: string, value: number, mode: SliderChangeMode): void {
+    if (kind === 'straighten') {
+      this.model.canvas.cropAngle = value;
+      this.ensureCropCover();
+    } else if (kind === 'perspectiveH') {
+      this.model.canvas.perspectiveH = value;
+    } else if (kind === 'perspectiveV') {
+      this.model.canvas.perspectiveV = value;
+    }
+    this.dirty = true;
   }
 
   /** 把手拖拽开始：把当前选区快照成基准（8 个把手共用） */
@@ -604,10 +1044,17 @@ export struct ImageEditor {
     this.model.canvas.cropVisible = true;
   }
 
-  async applyCrop(): Promise<void> {
+  applyCrop(): void {
     // 裁的是**底图**（几何）：滤镜/纹理随后从新底图重算，效果不会丢
+    if (this.basePixelMap === undefined || !this.model.canvas.cropVisible) {
+      return;
+    }
+    this.withHistory((): Promise<void> => this.doApplyCrop());
+  }
+
+  private async doApplyCrop(): Promise<void> {
     const base: image.PixelMap | undefined = this.basePixelMap;
-    if (base === undefined || !this.model.canvas.cropVisible) {
+    if (base === undefined) {
       return;
     }
     const dispOld: DispRect = this.dispRect();
@@ -616,26 +1063,52 @@ export struct ImageEditor {
     // 选区与图片变换都取自 CanvasState（与 UI 使用的是同一份数据）
     const rect: CropRect = this.model.canvas.cropRect();
     const view: CropView = this.model.canvas.cropView();
-    const t: CropDrawTransform = cropDrawTransform(rect, view);
+    const pH: number = this.model.canvas.perspectiveH;
+    const pV: number = this.model.canvas.perspectiveV;
     this.processing = true;
+    this.showBusy = true;
     try {
-      // 与 UI 同一套变换在离屏画布上重绘 → 缩放/平移/旋转都被正确带进结果
+      // 与 UI 同一套变换在离屏画布上重绘 → 缩放/平移/旋转/镜像都被正确带进结果
       const res: CropComposeResult = await composeCropToPixelMap(base, oldW, oldH, rect, view,
         CanvasSpec.MAX_LONG_EDGE);
+      let cropPm: image.PixelMap = res.pixelMap;
+      // 水平/垂直透视校正：几何烘焙后逐像素重映射（与预览矩阵同一套数学）
+      if (Math.abs(pH) > 0 || Math.abs(pV) > 0) {
+        const pbytes: ArrayBuffer = new ArrayBuffer(cropPm.getPixelBytesNumber());
+        await cropPm.readPixelsToBuffer(pbytes);
+        const fixed: object = await taskpool.execute(runPerspectiveTask, pbytes,
+          res.width, res.height, pH, pV);
+        cropPm = await image.createPixelMap(fixed as ArrayBuffer, {
+          size: { width: res.width, height: res.height },
+          pixelFormat: image.PixelMapFormat.RGBA_8888,
+          editable: true
+        });
+        // 旧的离屏产物释放（baseScope.setCurrent 只接管 cropPm）
+        PixelScope.safeRelease(res.pixelMap);
+      }
       this.model.canvas.imageW = res.width;
       this.model.canvas.imageH = res.height;
-      // 裁剪产物来自离屏画布：归一化成可编辑的 RGBA 底图，后续旋转/翻转才能原地改
-      this.basePixelMap = this.baseScope.setCurrent(await this.toEditableRgba(res.pixelMap));
-      // 图层锚点重映射：旧图像素 → 屏幕(vp) → 输出画布像素 → 新图像素
-      // （乘 canvasScale 抵消长边护栏带来的额外缩放）
-      const dispNew: DispRect = this.dispRect();
-      const toOutput: number = dispNew.scale > 0 ? 1 / (dispNew.scale * res.canvasScale) : 1;
+      // 裁剪产物归一化成可编辑的 RGBA 底图，后续旋转/翻转才能原地改
+      this.basePixelMap = this.baseScope.setCurrent(await this.toEditableRgba(cropPm));
+      this.invalidateProcessCaches();
+      // 图层锚点重映射（正向投影，与 composeCropToPixelMap 同一套变换）：
+      //   旧源像素 p → 镜像 → 旋转/缩放/平移 → 输出画布像素 = 新图像素
+      // 之前用 unprojectCrop（逆变换）且输入未考虑裁剪态变换，导致文字/贴纸裁剪后错位。
+      const tCompose: CropDrawTransform = cropComposeTransform(rect, view, res.canvasScale);
+      const cosA: number = Math.cos(tCompose.radians);
+      const sinA: number = Math.sin(tCompose.radians);
+      const sx: number = view.flipH ? -1 : 1;
+      const sy: number = view.flipV ? -1 : 1;
       this.remapOverlays((p: LayerPoint): LayerPoint => {
-        const sx: number = dispOld.x + p.x * dispOld.scale;
-        const sy: number = dispOld.y + p.y * dispOld.scale;
-        return unprojectCrop((sx - dispNew.x) * toOutput, (sy - dispNew.y) * toOutput, t);
+        // 先逆镜像（与 composeCropToPixelMap 中 drawImage 偏移方向一致）
+        const ox: number = sx < 0 ? oldW - 1 - p.x : p.x;
+        const oy: number = sy < 0 ? oldH - 1 - p.y : p.y;
+        // 正向变换到输出画布像素（= 新图像素，画布与新图 1:1）
+        const nx: number = tCompose.tx + tCompose.scale * (ox * cosA - oy * sinA);
+        const ny: number = tCompose.ty + tCompose.scale * (ox * sinA + oy * cosA);
+        return { x: nx, y: ny };
       }, dispOld, this.model.canvas.imageW, this.model.canvas.imageH);
-      // 提交后退出裁剪态并复位（选区、比例、图片变换）
+      // 提交后退出裁剪态并复位（选区、比例、图片变换、透视量）
       this.model.canvas.clearCrop();
       await this.refreshFromBase(true);
       promptAction.showToast({ message: '已裁剪 ✅' });
@@ -645,6 +1118,7 @@ export struct ImageEditor {
       this.model.canvas.cropVisible = false;
     } finally {
       this.processing = false;
+      this.showBusy = false;
     }
   }
   /**
@@ -663,39 +1137,44 @@ export struct ImageEditor {
   // ==================== 滤镜 ====================
 
   /**
-   * 应用滤镜：从**底图**重算（问题四），逐像素计算放到 TaskPool 工作线程，
-   * 只跨线程传 ArrayBuffer，不传 PixelMap；处理中显示遮罩并屏蔽重复点击。
+   * 应用滤镜：从**底图**重算，逐像素计算在 TaskPool 工作线程，
+   * 只跨线程传 ArrayBuffer，不传 PixelMap；重复点击由历史闸门串行化。
    *
    * 再点一次当前滤镜 = 取消（回到原图色）；换一个滤镜 = 换掉，不叠色。
    */
-  async applyFilter(name: string): Promise<void> {
-    if (name === NO_FILTER) {
-      // 恢复原图：重新解码文件（几何/滤镜/纹理一起复位，与旧行为一致）
-      this.filterName = NO_FILTER;
-      this.textureName = NO_TEXTURE;
-      // 若之前裁剪过，重载会改变底图尺寸，图层锚点按比例回射到新底图
-      const oldW: number = this.model.canvas.imageW;
-      const oldH: number = this.model.canvas.imageH;
-      const dispOld: DispRect = this.dispRect();
-      await this.loadOriginal();
-      if (oldW > 0 && oldH > 0
-        && (oldW !== this.model.canvas.imageW || oldH !== this.model.canvas.imageH)) {
-        const sx: number = this.model.canvas.imageW / oldW;
-        const sy: number = this.model.canvas.imageH / oldH;
-        this.remapOverlays((p: LayerPoint): LayerPoint => {
-          return { x: p.x * sx, y: p.y * sy };
-        }, dispOld, this.model.canvas.imageW, this.model.canvas.imageH);
-      }
-      return;
-    }
-    if (this.processing) {
-      return;
-    }
+  applyFilter(name: string): void {
     if (this.basePixelMap === undefined) {
       return;
     }
+    if (name === NO_FILTER) {
+      // 点「原图」= 清滤镜链（也可撤销：恢复滤镜状态）
+      this.withHistory((): Promise<void> => this.clearFilterChain());
+      return;
+    }
+    this.withHistory((): Promise<void> => this.doApplyFilter(name));
+  }
+
+  /** 清掉滤镜链并复位强度（action 体） */
+  private async clearFilterChain(): Promise<void> {
+    this.filterName = NO_FILTER;
+    this.filterIntensity = 100;
+    this.textureName = NO_TEXTURE;
+    this.invalidateProcessCaches();
+    await this.refreshFromBase(true);
+  }
+
+  private async doApplyFilter(name: string): Promise<void> {
     // 再点一次当前滤镜 = 取消（回原图色），换一个 = 换掉，不叠色
-    this.filterName = toggleFilter(this.filterName, name);
+    const toggled: string = toggleFilter(this.filterName, name);
+    if (toggled === NO_FILTER) {
+      this.filterName = NO_FILTER;
+      this.filterIntensity = 100;
+      this.invalidateProcessCaches();
+    } else {
+      this.filterName = toggled;
+      this.filterIntensity = 100;
+      this.invalidateProcessCaches();
+    }
     await this.refreshFromBase(true);
   }
 
@@ -705,16 +1184,14 @@ export struct ImageEditor {
    * 应用纹理：同样从底图重算 —— 管线是"底图 → 滤镜 → 纹理"，强度取 textureStrength。
    * 再点一次当前纹理 = 取消。
    */
-  async applyTexture(name: string): Promise<void> {
-    if (name === '') {
+  applyTexture(name: string): void {
+    if (name === '' || this.basePixelMap === undefined) {
       return;
     }
-    if (this.processing) {
-      return;
-    }
-    if (this.basePixelMap === undefined) {
-      return;
-    }
+    this.withHistory((): Promise<void> => this.doApplyTexture(name));
+  }
+
+  private async doApplyTexture(name: string): Promise<void> {
     this.textureName = toggleTexture(this.textureName, name);
     await this.refreshFromBase(true);
   }
@@ -728,7 +1205,11 @@ export struct ImageEditor {
       promptAction.showToast({ message: '请输入文字' });
       return;
     }
-    // 级联偏移：避免连续添加的文字全部重叠在画面正中心
+    this.withHistory((): Promise<void> => this.doAddText(text));
+  }
+
+  /** action 体：级联偏移避免新文字全叠在画面中心 */
+  private async doAddText(text: string): Promise<void> {
     const cascade: number = this.model.layers.textCount() % 4;
     const item: TextItem = {
       content: text,
@@ -752,6 +1233,10 @@ export struct ImageEditor {
 
   removeText(idx: number): void {
     // 删除后的选中态由 LayerStore 修正（删的是选中项 → 取消选中；删的是它前面的项 → 下标前移）
+    this.withHistory((): Promise<void> => this.doRemoveText(idx));
+  }
+
+  private async doRemoveText(idx: number): Promise<void> {
     this.model.layers.removeText(idx);
     this.dirty = true;
   }
@@ -780,6 +1265,10 @@ export struct ImageEditor {
 
   /** 添加贴纸到画布（content 为 file:// 路径或相册临时 URI） */
   private pushSticker(content: string): void {
+    this.withHistory((): Promise<void> => this.doPushSticker(content));
+  }
+
+  private async doPushSticker(content: string): Promise<void> {
     const item: StickerItem = { content: content, x: 0, y: 0, scale: 1, angle: 0 };
     // LayerStore.addSticker 会顺带选中新图层并标脏
     this.model.layers.addSticker(item);
@@ -842,6 +1331,10 @@ export struct ImageEditor {
 
   /** 删除贴纸 */
   removeSticker(idx: number): void {
+    this.withHistory((): Promise<void> => this.doRemoveSticker(idx));
+  }
+
+  private async doRemoveSticker(idx: number): Promise<void> {
     // 删除后的选中态由 LayerStore 修正（与文字同规则）
     this.model.layers.removeSticker(idx);
     this.dirty = true;
@@ -875,15 +1368,25 @@ export struct ImageEditor {
       promptAction.showToast({ message: '图片处理中，请稍候' });
       return;
     }
-    const pm: image.PixelMap | undefined = this.curPixelMap;
-    if (pm === undefined) {
+    const pm0: image.PixelMap | undefined = this.curPixelMap;
+    if (pm0 === undefined) {
       return;
     }
+    // 导出无需登录（用户体系暂未开放，登录入口已隐藏）
     this.saving = true;
     const ctx: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
     let dest: string = '';
     try {
+      // 裁剪态直接点保存：先应用裁剪再导出。
+      // 此前只是 cropVisible=false 把框藏起来，裁剪被静默丢弃 —— 用户框选的内容没进成品。
+      if (this.model.canvas.isCropping()) {
+        await this.doApplyCrop();
+      }
       this.model.canvas.cropVisible = false;
+      const pm: image.PixelMap | undefined = this.curPixelMap;
+      if (pm === undefined) {
+        return;
+      }
       // 离屏合成：底图原分辨率 + 文字 + 贴纸，不截屏幕（无灰边、无选中态红钮、不被降采样）
       const buf: ArrayBuffer = await composeToJpeg(pm, this.model.canvas.imageW, this.model.canvas.imageH,
         this.model.layers.texts(), this.model.layers.stickers(), this.dispRect(),
@@ -919,15 +1422,31 @@ export struct ImageEditor {
   toolChip(label: string, key: string) {
     Text(label)
       .fontSize(13)
-      .fontColor(this.tool === key ? Color.White : '#666666')
-      .backgroundColor(this.tool === key ? '#FF6B6B' : '#F0F0F0')
-      .padding({ left: 16, right: 16, top: 6, bottom: 6 })
+      .fontColor(this.tool === key ? Color.White : '#1F1F1F')
+      .backgroundColor(this.tool === key ? '#C22F38' : '#F0F0F0')
+      // 收窄左右内边距，让 6 个工具 chip 在常见机型上一屏放得下
+      .padding({ left: 12, right: 12, top: 6, bottom: 6 })
       .borderRadius(14)
       .onClick(() => {
         this.tool = key;
+        this.panelCollapsed = false;
         if (key === 'crop' && !this.model.canvas.cropVisible) {
           this.selectCropRatio('自由');
         }
+      })
+  }
+
+  @Builder
+  phraseChip(p: string, color: string, bg: string) {
+    Text(p)
+      .fontSize(12)
+      .fontColor(color)
+      .backgroundColor(bg)
+      .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+      .borderRadius(10)
+      .margin({ right: 8, bottom: 8 })
+      .onClick(() => {
+        this.addPhrase(p);
       })
   }
 
@@ -951,7 +1470,7 @@ export struct ImageEditor {
         LoadingProgress()
           .width(60)
           .height(60)
-          .color('#FF6B6B')
+          .color('#C22F38')
       } else {
         Column() {
           // ===== 顶部栏 =====
@@ -966,16 +1485,35 @@ export struct ImageEditor {
                 // 统一走 requestClose：有未保存修改会先确认
                 this.requestClose();
               })
+            // 撤销 / 重做（禁用态变浅：点击无响应）
+            Text('↶')
+              .fontSize(22)
+              .fontColor(this.canUndo ? '#333333' : '#CCCCCC')
+              .width(44)
+              .height(40)
+              .textAlign(TextAlign.Center)
+              .onClick(() => {
+                this.undo();
+              })
+            Text('↷')
+              .fontSize(22)
+              .fontColor(this.canRedo ? '#333333' : '#CCCCCC')
+              .width(44)
+              .height(40)
+              .textAlign(TextAlign.Center)
+              .onClick(() => {
+                this.redo();
+              })
             // 保存中：在标题位显示进度，让用户知道在等什么（此前点了无任何反馈）
             if (this.saving) {
               Row({ space: 6 }) {
                 LoadingProgress()
                   .width(16)
                   .height(16)
-                  .color('#FF6B6B')
+                  .color('#C22F38')
                 Text('正在保存…')
                   .fontSize(13)
-                  .fontColor('#9A9AA5')
+                  .fontColor('#66666F')
               }
               .layoutWeight(1)
               .justifyContent(FlexAlign.Center)
@@ -1049,11 +1587,14 @@ export struct ImageEditor {
               },
               onCropHandleDrag: (type: number, dx: number, dy: number): void => {
                 this.onCropHandleDrag(type, dx, dy);
+              },
+              onCropAdjust: (kind: string, value: number, mode: SliderChangeMode): void => {
+                this.onCropAdjust(kind, value, mode);
               }
             })
 
-            // ===== 后台处理遮罩（滤镜/纹理 TaskPool 执行期间，盖在预览最上层） =====
-            if (this.processing) {
+            // ===== 后台处理遮罩（滤镜/纹理重算期间盖在预览最上层；滑杆 mix 不遮） =====
+            if (this.showBusy) {
               Column() {
                 LoadingProgress()
                   .width(44)
@@ -1082,23 +1623,42 @@ export struct ImageEditor {
             this.dispRect();
           })
 
-          // ===== 工具 tab（横向滚动，防止 chip 被截断） =====
-          Scroll() {
-            Row({ space: 8 }) {
-              this.toolChip('旋转/翻转', 'transform')
-              this.toolChip('裁剪', 'crop')
-              this.toolChip('滤镜', 'filter')
-              this.toolChip('纹理', 'texture')
-              this.toolChip('文字', 'text')
-              this.toolChip('贴纸', 'sticker')
+          // ===== 工具 tab + 收起开关 =====
+          Row({ space: 8 }) {
+            Scroll() {
+              Row({ space: 8 }) {
+                this.toolChip('旋转/翻转', 'transform')
+                this.toolChip('裁剪', 'crop')
+                this.toolChip('滤镜', 'filter')
+                this.toolChip('纹理', 'texture')
+                this.toolChip('文字', 'text')
+                this.toolChip('贴纸', 'sticker')
+              }
+              // 右侧留出滚动余量，滚到末尾时最后一个 chip 不会被收起按钮截断
+              .padding({ left: 2, right: 12, top: 8, bottom: 6 })
             }
-            .padding({ top: 8, bottom: 6 })
-          }
-          .scrollable(ScrollDirection.Horizontal)
-          .scrollBar(BarState.Off)
-          .width('100%')
+            .scrollable(ScrollDirection.Horizontal)
+            .scrollBar(BarState.Off)
+            .layoutWeight(1)
+            .edgeEffect(EdgeEffect.Spring)
 
-          // ===== 工具面板 =====
+            Text(this.panelCollapsed ? '🔼' : '🔽')
+              .fontSize(13)
+              .fontColor('#66666F')
+              .backgroundColor('#F0F0F0')
+              .width(34)
+              .height(30)
+              .textAlign(TextAlign.Center)
+              .borderRadius(14)
+              .onClick(() => {
+                this.panelCollapsed = !this.panelCollapsed;
+              })
+          }
+          .width('100%')
+          .padding({ left: 10, right: 10 })
+
+          // ===== 工具面板（收起时整块隐藏，预览区最大化） =====
+          if (!this.panelCollapsed) {
           Column({ space: 8 }) {
             if (this.tool === 'transform') {
               Row({ space: 10 }) {
@@ -1133,11 +1693,11 @@ export struct ImageEditor {
                         .fontColor(this.canvas.cropVisible && this.canvas.cropRatio === r
                           ? Color.White : '#555555')
                         .backgroundColor(this.canvas.cropVisible && this.canvas.cropRatio === r
-                          ? '#FF6B6B' : Color.White)
+                          ? '#C22F38' : Color.White)
                         .border({
                           width: 1,
                           color: this.canvas.cropVisible && this.canvas.cropRatio === r
-                            ? '#FF6B6B' : '#DDDDDD'
+                            ? '#C22F38' : '#DDDDDD'
                         })
                         .padding({ left: 14, right: 14, top: 7, bottom: 7 })
                         .borderRadius(16)
@@ -1151,6 +1711,7 @@ export struct ImageEditor {
                 .scrollable(ScrollDirection.Horizontal)
                 .scrollBar(BarState.Off)
                 .width('100%')
+                .edgeEffect(EdgeEffect.Spring)
 
                 // 旋转/镜像操作行（苹果照片式：在裁剪界面内操作）
                 Row({ space: 10 }) {
@@ -1171,84 +1732,209 @@ export struct ImageEditor {
                 .width('100%')
                 .justifyContent(FlexAlign.Center)
 
-                // 操作按钮：重置（裁剪专用）、取消、应用
-                Row({ space: 14 }) {
+                // ===== 微调折叠区：拉直/水平/垂直（默认收起，先裁剪再微调） =====
+                Row({ space: 6 }) {
+                  Text('微调')
+                    .fontSize(12)
+                    .fontColor('#66666F')
+                  Text(this.cropAdjustExpanded ? '▾' : '▸')
+                    .fontSize(10)
+                    .fontColor('#66666F')
+                  Blank()
+                  if (this.cropAdjustExpanded) {
+                    Text('↺ 复位')
+                      .fontSize(11)
+                      .fontColor('#C22F38')
+                      .backgroundColor('#FFF0F1')
+                      .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+                      .borderRadius(10)
+                      .onClick(() => {
+                        this.onCropAdjust('straighten', 0, SliderChangeMode.Click);
+                        this.onCropAdjust('perspectiveH', 0, SliderChangeMode.Click);
+                        this.onCropAdjust('perspectiveV', 0, SliderChangeMode.Click);
+                      })
+                  }
+                }
+                .width('100%')
+                .padding({ left: 14, right: 14 })
+                .onClick(() => {
+                  this.cropAdjustExpanded = !this.cropAdjustExpanded;
+                })
+
+                if (this.cropAdjustExpanded) {
+                  // 拉直
+                  Row({ space: 8 }) {
+                    Text('拉直')
+                      .fontSize(11).fontColor('#66666F').width(36)
+                    Slider({
+                      value: this.canvas.cropAngle,
+                      min: -45, max: 45, step: 1
+                    })
+                      .layoutWeight(1)
+                      .selectedColor('#C22F38')
+                      .onChange((v: number, mode: SliderChangeMode) => {
+                        this.onCropAdjust('straighten', v, mode);
+                      })
+                    Text(`${Math.round(this.canvas.cropAngle)}°`)
+                      .fontSize(10).fontColor('#66666F').width(34)
+                  }
+                  .width('100%')
+                  .padding({ left: 14, right: 8 })
+
+                  // 水平透视
+                  Row({ space: 8 }) {
+                    Text('水平')
+                      .fontSize(11).fontColor('#66666F').width(36)
+                    Slider({
+                      value: this.canvas.perspectiveH,
+                      min: -100, max: 100, step: 1
+                    })
+                      .layoutWeight(1)
+                      .selectedColor('#C22F38')
+                      .onChange((v: number, mode: SliderChangeMode) => {
+                        this.onCropAdjust('perspectiveH', v, mode);
+                      })
+                    Text(`${Math.round(this.canvas.perspectiveH)}`)
+                      .fontSize(10).fontColor('#66666F').width(34)
+                  }
+                  .width('100%')
+                  .padding({ left: 14, right: 8 })
+
+                  // 垂直透视
+                  Row({ space: 8 }) {
+                    Text('垂直')
+                      .fontSize(11).fontColor('#66666F').width(36)
+                    Slider({
+                      value: this.canvas.perspectiveV,
+                      min: -100, max: 100, step: 1
+                    })
+                      .layoutWeight(1)
+                      .selectedColor('#C22F38')
+                      .onChange((v: number, mode: SliderChangeMode) => {
+                        this.onCropAdjust('perspectiveV', v, mode);
+                      })
+                    Text(`${Math.round(this.canvas.perspectiveV)}`)
+                      .fontSize(10).fontColor('#66666F').width(34)
+                  }
+                  .width('100%')
+                  .padding({ left: 14, right: 8 })
+                }
+
+                // 操作按钮：重置 | 取消 | 应用（合并一行，主要按钮稍宽引导点击）
+                Row({ space: 8 }) {
                   Text('重置')
                     .fontSize(13)
-                    .fontColor('#666666')
+                    .fontColor('#1F1F1F')
                     .backgroundColor('#F2F2F2')
-                    .padding({ left: 20, right: 20, top: 8, bottom: 8 })
-                    .borderRadius(18)
+                    .layoutWeight(1)
+                    .height(34)
+                    .textAlign(TextAlign.Center)
+                    .borderRadius(17)
                     .onClick(() => {
                       this.resetCrop();
                     })
                   Text('取消')
                     .fontSize(13)
-                    .fontColor('#666666')
+                    .fontColor('#1F1F1F')
                     .backgroundColor('#F2F2F2')
-                    .padding({ left: 20, right: 20, top: 8, bottom: 8 })
-                    .borderRadius(18)
+                    .layoutWeight(1)
+                    .height(34)
+                    .textAlign(TextAlign.Center)
+                    .borderRadius(17)
                     .onClick(() => {
-                      // 退出裁剪态并复位（选区、比例、图片变换）
                       this.model.canvas.clearCrop();
                     })
                   Text('✓ 应用')
                     .fontSize(13)
                     .fontWeight(FontWeight.Medium)
                     .fontColor(Color.White)
-                    .backgroundColor('#FF6B6B')
-                    .padding({ left: 24, right: 24, top: 8, bottom: 8 })
-                    .borderRadius(18)
-                    .shadow({ radius: 4, color: '#33FF6B6B', offsetY: 1 })
+                    .backgroundColor('#C22F38')
+                    .layoutWeight(1.2)
+                    .height(34)
+                    .textAlign(TextAlign.Center)
+                    .borderRadius(17)
+                    .shadow({ radius: 4, color: '#33C9333D', offsetY: 1 })
                     .onClick(() => {
                       this.applyCrop();
                     })
                 }
                 .width('100%')
+                .padding({ left: 12, right: 12 })
                 .justifyContent(FlexAlign.Center)
-
-                Text('拖动选区调整大小，拖动图片调整位置，双指缩放')
-                  .fontSize(11)
-                  .fontColor('#AAAAAA')
               }
               .width('100%')
               .padding({ top: 2, bottom: 2 })
             } else if (this.tool === 'filter') {
-              Scroll() {
-                Column({ space: 8 }) {
-                  Row({ space: 8 }) {
-                    ForEach(BASE_FILTERS, (f: string) => {
-                      Text(f)
-                        .fontSize(13)
-                        .fontColor(this.filterName === f ? Color.White : '#666666')
-                        .backgroundColor(this.filterName === f ? '#FF6B6B' : '#F0F0F0')
-                        .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-                        .borderRadius(12)
-                        .onClick(() => {
-                          this.applyFilter(f);
-                        })
-                    })
+              Column({ space: 4 }) {
+                Scroll() {
+                  Column({ space: 8 }) {
+                    Row({ space: 8 }) {
+                      ForEach(BASE_FILTERS, (f: string) => {
+                        Text(f)
+                          .fontSize(13)
+                          .fontColor(this.filterName === f ? Color.White : '#1F1F1F')
+                          .backgroundColor(this.filterName === f ? '#C22F38' : '#F0F0F0')
+                          .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+                          .borderRadius(12)
+                          .onClick(() => {
+                            this.applyFilter(f);
+                          })
+                      })
+                    }
+                    Row({ space: 8 }) {
+                      ForEach(STYLE_FILTERS, (f: string) => {
+                        Text(f)
+                          .fontSize(13)
+                          .fontColor(this.filterName === f ? Color.White : '#AA66FF')
+                          .backgroundColor(this.filterName === f ? '#AA66FF' : '#F3EDFF')
+                          .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+                          .borderRadius(12)
+                          .onClick(() => {
+                            this.applyFilter(f);
+                          })
+                      })
+                    }
                   }
-                  Row({ space: 8 }) {
-                    ForEach(STYLE_FILTERS, (f: string) => {
-                      Text(f)
-                        .fontSize(13)
-                        .fontColor(this.filterName === f ? Color.White : '#AA66FF')
-                        .backgroundColor(this.filterName === f ? '#AA66FF' : '#F3EDFF')
-                        .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-                        .borderRadius(12)
-                        .onClick(() => {
-                          this.applyFilter(f);
-                        })
-                    })
-                  }
+                  .padding({ left: 12, right: 12 })
                 }
-                .padding({ left: 12, right: 12 })
+                .scrollable(ScrollDirection.Vertical)
+                .scrollBar(BarState.Off)
+                .width('100%')
+                .height(78)
+                .edgeEffect(EdgeEffect.Spring)
+
+                // 滤镜强度（仅选中滤镜时显示；一次调节 = 一个撤销步）
+                if (this.filterName !== NO_FILTER) {
+                  Row({ space: 10 }) {
+                    Text('强度')
+                      .fontSize(12)
+                      .fontColor('#66666F')
+                    Slider({ value: this.filterIntensity, min: 0, max: 100, step: 1 })
+                      .layoutWeight(1)
+                      .selectedColor('#C22F38')
+                      .onChange((v: number, mode: SliderChangeMode) => {
+                        if (mode === SliderChangeMode.Begin) {
+                          this.beginSliderHistory();
+                        } else if (mode === SliderChangeMode.Click) {
+                          this.beginSliderHistory();
+                        }
+                        this.filterIntensity = v;
+                        if (!this.processing) {
+                          this.refreshFromBase(true);
+                        } else {
+                          this.intensityPending = true;
+                        }
+                      })
+                    Text(`${this.filterIntensity}%`)
+                      .fontSize(12)
+                      .fontColor('#61616A')
+                      .width(38)
+                  }
+                  .width('100%')
+                  .padding({ left: 12, right: 8 })
+                }
               }
-              .scrollable(ScrollDirection.Vertical)
-              .scrollBar(BarState.Off)
               .width('100%')
-              .height(110)
             } else if (this.tool === 'texture') {
               Column({ space: 8 }) {
                 Scroll() {
@@ -1257,7 +1943,7 @@ export struct ImageEditor {
                       Text(t)
                         .fontSize(13)
                         .fontColor(this.textureName === t ? Color.White : '#666666')
-                        .backgroundColor(this.textureName === t ? '#FF6B6B' : '#F0F0F0')
+                        .backgroundColor(this.textureName === t ? '#C22F38' : '#F0F0F0')
                         .padding({ left: 14, right: 14, top: 6, bottom: 6 })
                         .borderRadius(12)
                         .onClick(() => {
@@ -1270,24 +1956,34 @@ export struct ImageEditor {
                 .scrollable(ScrollDirection.Horizontal)
                 .scrollBar(BarState.Off)
                 .width('100%')
+                .edgeEffect(EdgeEffect.Spring)
 
                 Row({ space: 10 }) {
                   Text('强度')
                     .fontSize(12)
-                    .fontColor('#999999')
-                  Slider({ value: this.textureStrength, min: 10, max: 100, step: 5 })
-                    .width('50%')
-                    .selectedColor('#FF6B6B')
+                    .fontColor('#66666F')
+                  Slider({ value: this.textureStrength, min: 0, max: 100, step: 1 })
+                    .layoutWeight(1)
+                    .selectedColor('#C22F38')
                     .onChange((v: number, mode: SliderChangeMode) => {
+                      // BUG2：此前只有 End 重绘，点轨道（Click）画面不动
+                      if (mode === SliderChangeMode.Begin
+                        || mode === SliderChangeMode.Click) {
+                        this.beginSliderHistory();
+                      }
                       this.textureStrength = v;
-                      // 松手才重跑纹理：拖动中每帧跑一次 TaskPool 太贵（且管线是从底图重算的）
-                      if (mode === SliderChangeMode.End && this.textureName !== '' && !this.processing) {
-                        this.refreshFromBase(true);
+                      if (this.textureName !== '') {
+                        // 处理中自动丢弃中间帧，结束后补最终值（intensityPending）
+                        if (!this.processing) {
+                          this.refreshFromBase(true);
+                        } else {
+                          this.intensityPending = true;
+                        }
                       }
                     })
                   Text(`${this.textureStrength}%`)
                     .fontSize(12)
-                    .fontColor('#666666')
+                    .fontColor('#61616A')
                 }
                 .width('100%')
                 .padding({ left: 12, right: 12 })
@@ -1295,62 +1991,72 @@ export struct ImageEditor {
             } else if (this.tool === 'text') {
               Scroll() {
                 Column({ space: 8 }) {
-                  if (!this.showTextInput) {
-                    Row({ space: 10 }) {
-                      this.opButton('✍️ 自定义文字', () => {
-                        this.showTextInput = true;
+
+                  // ===== 区 1：颜色行 + ✍ 自定义入口 =====
+                  Row({ space: 8 }) {
+                    ForEach(TEXT_COLORS, (c: string) => {
+                      Circle({ width: 22, height: 22 })
+                        .fill(c)
+                        .border({ width: this.textColor === c ? 2 : 0, color: '#C22F38' })
+                        .onClick(() => {
+                          this.textColor = c;
+                          const idx: number = this.model.layers.selectedText();
+                          if (idx >= 0) {
+                            this.model.layers.setTextColor(idx, c);
+                            this.dirty = true;
+                          }
+                        })
+                    })
+                    Blank()
+                    Text('✍')
+                      .fontSize(16)
+                      .fontColor(this.showTextInput ? '#C22F38' : '#666666')
+                      .backgroundColor(this.showTextInput ? '#FFF0F1' : '#F0F0F0')
+                      .width(32).height(28)
+                      .borderRadius(14)
+                      .textAlign(TextAlign.Center)
+                      .onClick(() => {
+                        this.showTextInput = !this.showTextInput;
                       })
-                      this.opButton('清除全部', () => {
-                        this.model.layers.clearTexts();
-                        this.dirty = true;
-                      })
-                    }
-                    .width('100%')
-                    .justifyContent(FlexAlign.Center)
-                  } else {
-                    Column({ space: 8 }) {
+                  }
+                  .width('100%')
+                  .padding({ left: 12, right: 12 })
+
+                  // 自定义输入框（点 ✍ 后展开）
+                  if (this.showTextInput) {
+                    Column({ space: 6 }) {
                       TextArea({ placeholder: '输入文字（可换行）', text: this.textInput })
                         .fontSize(14)
-                        .height(70)
+                        .height(60)
                         .onChange((v: string) => {
                           this.textInput = v;
                         })
-                      Row({ space: 8 }) {
-                        ForEach(TEXT_COLORS, (c: string) => {
-                          Circle({ width: 24, height: 24 })
-                            .fill(c)
-                            .border({ width: this.textColor === c ? 2 : 0, color: '#FF6B6B' })
-                            .onClick(() => {
-                              this.textColor = c;
-                              // 已有选中文字时立即换色（与风格按钮行为一致），否则只作为新文字默认色
-                              const idx: number = this.model.layers.selectedText();
-                              if (idx >= 0) {
-                                this.model.layers.setTextColor(idx, c);
-                                this.dirty = true;
-                              }
-                            })
-                        })
-                      }
                       Row({ space: 10 }) {
                         this.opButton('确定', () => {
                           this.addText();
                         })
-                        this.opButton('取消', () => {
+                        this.opButton('清除全部', () => {
+                          this.model.layers.clearTexts();
+                          this.dirty = true;
+                        })
+                        Blank()
+                        this.opButton('收起', () => {
                           this.showTextInput = false;
                         })
                       }
+                      .width('100%')
                     }
                     .width('100%')
                     .padding({ left: 12, right: 12 })
                   }
 
-                  // 文字风格
+                  // ===== 区 2：文字风格 =====
                   Row({ space: 8 }) {
                     ForEach(TEXT_STYLES, (s: string, idx: number) => {
                       Text(s)
                         .fontSize(12)
-                        .fontColor(this.textStyle === idx ? Color.White : '#666666')
-                        .backgroundColor(this.textStyle === idx ? '#FF6B6B' : '#F0F0F0')
+                        .fontColor(this.textStyle === idx ? Color.White : '#1F1F1F')
+                        .backgroundColor(this.textStyle === idx ? '#C22F38' : '#F0F0F0')
                         .padding({ left: 12, right: 12, top: 5, bottom: 5 })
                         .borderRadius(10)
                         .onClick(() => {
@@ -1361,48 +2067,40 @@ export struct ImageEditor {
                   .width('100%')
                   .justifyContent(FlexAlign.Center)
 
-                  // 主题文字预置
-                  Text('主题文字')
-                    .fontSize(12)
-                    .fontColor('#999999')
-                    .width('100%')
-                    .padding({ left: 12 })
-                  Flex({ wrap: FlexWrap.Wrap }) {
-                    ForEach(THEME_PHRASES, (p: string) => {
-                      Text(p)
-                        .fontSize(12)
-                        .fontColor('#FF6B6B')
-                        .backgroundColor('#FFF0F1')
-                        .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-                        .borderRadius(10)
-                        .margin({ right: 8, bottom: 8 })
-                        .onClick(() => {
-                          this.addPhrase(p);
-                        })
-                    })
+                  // ===== 区 3：预设文案（分段切换） =====
+                  Row({ space: 6 }) {
+                    Text('主题文字')
+                      .fontSize(11)
+                      .fontColor(this.phraseTab === 0 ? Color.White : '#66666F')
+                      .backgroundColor(this.phraseTab === 0 ? '#C22F38' : '#F5F5F5')
+                      .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+                      .borderRadius(10)
+                      .onClick(() => {
+                        this.phraseTab = 0;
+                      })
+                    Text('励志语录')
+                      .fontSize(11)
+                      .fontColor(this.phraseTab === 1 ? Color.White : '#66666F')
+                      .backgroundColor(this.phraseTab === 1 ? '#C22F38' : '#F5F5F5')
+                      .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+                      .borderRadius(10)
+                      .onClick(() => {
+                        this.phraseTab = 1;
+                      })
                   }
                   .width('100%')
-                  .padding({ left: 12, right: 12 })
+                  .justifyContent(FlexAlign.Center)
 
-                  // 励志语录预置
-                  Text('励志语录')
-                    .fontSize(12)
-                    .fontColor('#999999')
-                    .width('100%')
-                    .padding({ left: 12 })
                   Flex({ wrap: FlexWrap.Wrap }) {
-                    ForEach(QUOTE_PHRASES, (p: string) => {
-                      Text(p)
-                        .fontSize(12)
-                        .fontColor('#666666')
-                        .backgroundColor('#F5F5F5')
-                        .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-                        .borderRadius(10)
-                        .margin({ right: 8, bottom: 8 })
-                        .onClick(() => {
-                          this.addPhrase(p);
-                        })
-                    })
+                    if (this.phraseTab === 0) {
+                      ForEach(THEME_PHRASES, (p: string) => {
+                        this.phraseChip(p, '#C22F38', '#FFF0F1')
+                      })
+                    } else {
+                      ForEach(QUOTE_PHRASES, (p: string) => {
+                        this.phraseChip(p, '#666666', '#F5F5F5')
+                      })
+                    }
                   }
                   .width('100%')
                   .padding({ left: 12, right: 12, bottom: 6 })
@@ -1412,20 +2110,21 @@ export struct ImageEditor {
               .scrollable(ScrollDirection.Vertical)
               .scrollBar(BarState.Off)
               .width('100%')
-              .height(150)
+              .constraintSize({ maxHeight: 220 })
+              .edgeEffect(EdgeEffect.Spring)
             } else if (this.tool === 'sticker') {
               Scroll() {
                 Column({ space: 12 }) {
-                  // 我的抠图贴纸
-                  Text('我的抠图贴纸（点击添加到画面）')
+                  // 我的贴纸（用户从相册导入的透明 PNG；本应用不做自动抠图）
+                  Text('我的贴纸（从相册导入，点击添加到画面）')
                     .fontSize(12)
-                    .fontColor('#999999')
+                    .fontColor('#66666F')
                     .width('100%')
                     .padding({ left: 12, top: 4 })
                   if (this.userStickers.length === 0) {
-                    Text('还没有贴纸，点下方「相册选贴纸」添加一张吧 �')
+                    Text('还没有贴纸，点下方「相册选贴纸」添加一张吧')
                       .fontSize(12)
-                      .fontColor('#BBBBBB')
+                      .fontColor('#66666F')
                       .width('100%')
                       .padding({ left: 12, right: 12 })
                   } else {
@@ -1464,7 +2163,7 @@ export struct ImageEditor {
 
                   Text('小贴士：推荐使用透明背景 PNG；贴纸可拖动、双指缩放、双指旋转')
                     .fontSize(11)
-                    .fontColor('#AAAAAA')
+                    .fontColor('#66666F')
                     .width('100%')
                     .padding({ left: 12, right: 12 })
                 }
@@ -1473,11 +2172,13 @@ export struct ImageEditor {
               .scrollable(ScrollDirection.Vertical)
               .scrollBar(BarState.Off)
               .width('100%')
-              .height(200)
+              .constraintSize({ maxHeight: 220 })
+              .edgeEffect(EdgeEffect.Spring)
             }
           }
           .width('100%')
           .padding({ bottom: 10 })
+          }
         }
         .width('100%')
         .height('100%')

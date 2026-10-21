@@ -12,10 +12,15 @@
 
 /**
  * 滤镜处理（TaskPool 入口）
- * @param bytes RGBA_8888 像素缓冲（会在缓冲上原地修改并返回）
+ *
+ * 只读输入、写独立输出：不修改入参缓冲。
+ *  - 此前是"原地写 px"，需要另存一份 orig 快照供邻居采样；现在输入全程只读，
+ *    邻居采样直接读输入，且**不会再污染调用方持有的缓冲**（满档缓存的正确性前提）。
+ * @param bytes RGBA_8888 像素缓冲（只读）
  * @param w     图宽
  * @param h     图高
  * @param name  滤镜名（与 ImageEditor 的 FILTERS 名称一致）
+ * @returns 新的 RGBA_8888 结果缓冲（alpha 原样保留）
  */
 @Concurrent
 export function runFilterTask(bytes: ArrayBuffer, w: number, h: number, name: string): ArrayBuffer {
@@ -25,15 +30,14 @@ export function runFilterTask(bytes: ArrayBuffer, w: number, h: number, name: st
   // ===== 局部工具函数 =====
   const clampByte = (v: number): number => Math.min(255, Math.max(0, v));
 
-  const px: Uint8Array = new Uint8Array(bytes);
-  // 需要读邻居像素的滤镜统一从原图快照读取，避免行序遍历的原地写入污染邻居
-  const orig: Uint8Array = px.slice();
+  const orig: Uint8Array = new Uint8Array(bytes);
+  const out: Uint8Array = new Uint8Array(bytes.byteLength);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i: number = (y * w + x) * 4;
-      let r: number = px[i];
-      let g: number = px[i + 1];
-      let b: number = px[i + 2];
+      let r: number = orig[i];
+      let g: number = orig[i + 1];
+      let b: number = orig[i + 2];
       if (name === '黑白') {
         const v: number = 0.299 * r + 0.587 * g + 0.114 * b;
         r = v;
@@ -227,21 +231,31 @@ export function runFilterTask(bytes: ArrayBuffer, w: number, h: number, name: st
         g += (nv - 0.5) * 16;
         b += (nv - 0.5) * 16;
       }
-      px[i] = clampByte(r);
-      px[i + 1] = clampByte(g);
-      px[i + 2] = clampByte(b);
+      out[i] = clampByte(r);
+      out[i + 1] = clampByte(g);
+      out[i + 2] = clampByte(b);
+      // 滤镜只改 RGB，alpha 原样保留（PNG/贴纸透明区不被破坏）
+      out[i + 3] = orig[i + 3];
     }
   }
-  return bytes;
+  return out.buffer as ArrayBuffer;
 }
 
 /**
- * 纹理叠加处理（TaskPool 入口，在传入缓冲上原地修改）
- * @param bytes     RGBA_8888 像素缓冲
+ * 纹理叠加处理（TaskPool 入口）
+ *
+ * 只读输入、写独立输出，且**所有纹理都按强度 k 线性混合**：
+ *      out = in + (full − in) · k        （full = k=1 的满档效果）
+ * 调用方缓存 k=1 的满档结果后，拖强度滑杆只做一次线性混合（ImageEditor.mixLinear），
+ * 不必全量重算（此前 5 种纹理里只有光晕/污渍读强度，
+ * 纸纹/水彩纸纹/噪点强度完全无效 → 表现为"变化不大"）。
+ *
+ * @param bytes     RGBA_8888 像素缓冲（只读）
  * @param w         图宽
  * @param h         图高
  * @param name      纹理名：纸纹/水彩纸纹/噪点/光晕/污渍
- * @param strength  强度 0~100
+ * @param strength  强度 0~100（0=原图，100=满档）
+ * @returns 新的 RGBA_8888 结果缓冲（alpha 原样保留）
  */
 @Concurrent
 export function runTextureTask(bytes: ArrayBuffer, w: number, h: number,
@@ -253,10 +267,13 @@ export function runTextureTask(bytes: ArrayBuffer, w: number, h: number,
     return n - Math.floor(n);
   };
 
-  const px: Uint8Array = new Uint8Array(bytes);
+  const src: Uint8Array = new Uint8Array(bytes);
+  const out: Uint8Array = new Uint8Array(bytes.byteLength);
   const k: number = strength / 100;
 
-  // 污渍斑点：用 4 个并行数字（x/y/r/a）描述，避免在并发函数内声明对象数组
+  // 污渍斑点：用 4 个并行数字（x/y/r/a）描述，避免在并发函数内声明对象数组。
+  // 位置/半径/浓度改为"由序号确定性生成"——此前用 Math.random()，
+  // 每次调用（每拖一次强度、每次预览→导出）斑点都重新随机 → 画面跳动、导出与预览不一致。
   const STAIN_COUNT: number = 8;
   const sx: number[] = new Array<number>(STAIN_COUNT);
   const sy: number[] = new Array<number>(STAIN_COUNT);
@@ -264,49 +281,50 @@ export function runTextureTask(bytes: ArrayBuffer, w: number, h: number,
   const sa: number[] = new Array<number>(STAIN_COUNT);
   if (name === '污渍') {
     for (let i = 0; i < STAIN_COUNT; i++) {
-      sx[i] = Math.random() * w;
-      sy[i] = Math.random() * h;
-      sr[i] = 30 + Math.random() * 90;
-      sa[i] = 0.12 + Math.random() * 0.18;
+      sx[i] = noise2(i * 7.13 + 1.7, 3.1) * w;
+      sy[i] = noise2(i * 3.77 + 9.2, 17.3) * h;
+      sr[i] = 30 + noise2(i * 5.31 + 4.4, 23.9) * 90;
+      sa[i] = 0.12 + noise2(i * 2.11 + 8.8, 41.7) * 0.18;
     }
   }
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i: number = (y * w + x) * 4;
-      const r: number = px[i];
-      const g: number = px[i + 1];
-      const b: number = px[i + 2];
-      let nr: number = r;
-      let ng: number = g;
-      let nb: number = b;
+      const r: number = src[i];
+      const g: number = src[i + 1];
+      const b: number = src[i + 2];
+      // 先算 k=1 的满档结果 fr/fg/fb，再按 k 线性混合
+      let fr: number = r;
+      let fg: number = g;
+      let fb: number = b;
       if (name === '纸纹') {
         const t: number = 0.90 + noise2(x, y) * 0.10;
-        nr = r * t + 5;
-        ng = g * t + 4;
-        nb = b * t + 2;
+        fr = r * t + 5;
+        fg = g * t + 4;
+        fb = b * t + 2;
       } else if (name === '水彩纸纹') {
         const coarseX: number = Math.floor(x / 3);
         const coarseY: number = Math.floor(y / 3);
         const t: number = 0.86 + noise2(coarseX, coarseY) * 0.14;
-        nr = r * t;
-        ng = g * t;
-        nb = b * t;
+        fr = r * t;
+        fg = g * t;
+        fb = b * t;
       } else if (name === '噪点') {
         // 噪点幅度从 ±7% 提到 ±20%，颗粒感明显可见
         const t: number = 0.80 + noise2(x, y) * 0.40;
-        nr = r * t;
-        ng = g * t;
-        nb = b * t;
+        fr = r * t;
+        fg = g * t;
+        fb = b * t;
       } else if (name === '光晕') {
         const dx: number = (x - w / 2) / (w / 2);
         const dy: number = (y - h / 2) / (h / 2);
         const d: number = Math.sqrt(dx * dx + dy * dy);
         // 中心亮度从 70 提到 120，柔光感更明显
-        const glow: number = Math.max(0, 1 - d) * 120 * k;
-        nr = r + glow;
-        ng = g + glow;
-        nb = b + glow;
+        const glow: number = Math.max(0, 1 - d) * 120;
+        fr = r + glow;
+        fg = g + glow;
+        fb = b + glow;
       } else if (name === '污渍') {
         let dark: number = 0;
         for (let s = 0; s < STAIN_COUNT; s++) {
@@ -317,15 +335,17 @@ export function runTextureTask(bytes: ArrayBuffer, w: number, h: number,
             dark = Math.max(dark, sa[s] * (1 - d / sr[s]));
           }
         }
-        const f: number = 1 - dark * k;
-        nr = r * f;
-        ng = g * f;
-        nb = b * f;
+        const f: number = 1 - dark;
+        fr = r * f;
+        fg = g * f;
+        fb = b * f;
       }
-      px[i] = clampByte(nr);
-      px[i + 1] = clampByte(ng);
-      px[i + 2] = clampByte(nb);
+      out[i] = clampByte(r + (fr - r) * k);
+      out[i + 1] = clampByte(g + (fg - g) * k);
+      out[i + 2] = clampByte(b + (fb - b) * k);
+      out[i + 3] = src[i + 3];
     }
   }
-  return bytes;
+  return out.buffer as ArrayBuffer;
 }
+

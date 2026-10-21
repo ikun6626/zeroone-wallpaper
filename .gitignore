@@ -27,8 +27,12 @@
 # 与本工程无关的独立 npm 包（DSH Web 皮肤管理器，自带 LICENSE/package.json，应独立成仓）
 /dsh-deep-whale
 
-# 本仓库的 git 目录（Codex 沙箱不允许工作区里存在 .git，故改用此名；收尾时可改名回 .git）
-/.gitrepo/
-
 # 云存储上传包（由 tools/prepare_cloud_assets.py 生成，几十 MB，不入库）
 /assets-out/
+
+# 仓库目录自身（Codex 沙箱不允许工作区存在 .git，故仓库用 .gitrepo）
+/.gitrepo/
+
+# 编辑器自动备份与工具缓存（可重新生成）
+/.backup-ets-*/
+/.trae/

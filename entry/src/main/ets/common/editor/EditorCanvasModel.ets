@@ -145,6 +145,12 @@ export class ObservableLayerStore extends LayerStore {
     super.markDirty();
     this.bump();
   }
+
+  /** 撤销/重做整体恢复：转调父类后翻计数 */
+  restoreSnapshot(texts: TextItem[], stickers: StickerItem[]): void {
+    super.restoreSnapshot(texts, stickers);
+    this.bump();
+  }
 }
 
 @Observed

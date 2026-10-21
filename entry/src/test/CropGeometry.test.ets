@@ -29,7 +29,8 @@ const PREVIEW_H: number = 640;
 function view(scale: number, offsetX: number, offsetY: number, angle: number): CropView {
   return {
     disp: DISP, previewW: PREVIEW_W, previewH: PREVIEW_H,
-    scale: scale, offsetX: offsetX, offsetY: offsetY, angle: angle
+    scale: scale, offsetX: offsetX, offsetY: offsetY, angle: angle,
+    flipH: false, flipV: false
   };
 }
 
@@ -84,7 +85,8 @@ export default function cropGeometryTest() {
       const square: DispRect = { x: 0, y: 0, w: 100, h: 100, scale: 1 };
       const v: CropView = {
         disp: square, previewW: 100, previewH: 100,
-        scale: 1, offsetX: 0, offsetY: 0, angle: 90
+        scale: 1, offsetX: 0, offsetY: 0, angle: 90,
+        flipH: false, flipV: false
       };
       const t: CropDrawTransform = cropDrawTransform({ x: 0, y: 0, w: 100, h: 100 }, v);
       expect(t.tx).assertClose(100, 1e-9);
@@ -105,7 +107,7 @@ export default function cropGeometryTest() {
         const p: LayerPoint = samples[i];
         const ox: number = t.tx + t.scale * (p.x * cos - p.y * sin);
         const oy: number = t.ty + t.scale * (p.x * sin + p.y * cos);
-        const back: LayerPoint = unprojectCrop(ox, oy, t);
+        const back: LayerPoint = unprojectCrop(ox, oy, t, 1800, 3000);
         expect(back.x).assertClose(p.x, 1e-6);
         expect(back.y).assertClose(p.y, 1e-6);
       }
@@ -167,7 +169,7 @@ export default function cropGeometryTest() {
       const v: CropView = view(1, 0, 0, 0);
       const size: CropSize = cropOutputSize(rect, v);
       const t: CropDrawTransform = cropComposeTransform(rect, v, 1);
-      const center: LayerPoint = unprojectCrop(size.width / 2, size.height / 2, t);
+      const center: LayerPoint = unprojectCrop(size.width / 2, size.height / 2, t, 1800, 3000);
       const ux: number = (rect.x + rect.w / 2 - v.disp.x) / v.disp.scale;
       const uy: number = (rect.y + rect.h / 2 - v.disp.y) / v.disp.scale;
       expect(center.x).assertClose(ux, 1e-6);

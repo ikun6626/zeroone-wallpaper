@@ -1,4 +1,5 @@
 import { image } from '@kit.ImageKit';
+import { matrix4 } from '@kit.ArkUI';
 import { TextItem, StickerItem, DispRect } from '../editor/EditorModels';
 import { TEXT_COLORS } from '../editor/EditorConstants';
 import { ObservableCanvasState, ObservableLayerStore } from '../editor/EditorCanvasModel';
@@ -44,8 +45,14 @@ const CROP_HANDLE_EDGE_WIDTH: number = 0.5;
 export struct CanvasView {
   /** 画布状态：预览尺寸、底图尺寸、显示矩形、整套裁剪状态（见 common/editor/CanvasState.ets） */
   @ObjectLink state: ObservableCanvasState;
-  /** 图层数据：文字/贴纸 + 选中态 + 拖动实时标量（见 common/editor/LayerStore.ets） */
-  @ObjectLink layers: ObservableLayerStore;
+  /**
+   * 图层数据：文字/贴纸 + 选中态 + 拖动实时标量（见 common/editor/LayerStore.ets）
+   *
+   * 为什么要挂 @Watch：LayerStore 每次写操作都会推进 revision() 修订号。
+   * 挂上 @Watch 后，任何一次写操作都会把修订号同步进本组件的 @State，强制重建组件树。
+   * 否则在 ImageEditor 的调色板里改文字颜色时，画面不会动 —— 要等保存导出才生效。
+   */
+  @ObjectLink @Watch('onLayersMutated') layers: ObservableLayerStore;
   /**
    * 当前位图（Image 组件的数据源）
    *
@@ -73,6 +80,20 @@ export struct CanvasView {
   /** 贴纸旋转的实时值（把手拖动 / 双指旋转期间生效） */
   @State stickerAngleIdx: number = -1;
   @State stickerAngleLive: number = 0;
+  /**
+   * 图层修订号
+   *
+   * ObservableLayerStore 的每个写方法都会递增 tick()（见 EditorCanvasModel 的说明）。
+   * 把它同步进本组件的 @State，是为了**建立 @ObjectLink 依赖** ——
+   * 否则 tick 虽然变了，但没有任何组件"读"过它，ArkUI 就不会重建这棵渲染树，
+   * 表现为：在 ImageEditor 的调色板里改文字颜色，画面纹丝不动，要等保存导出才生效。
+   */
+  @State layerRev: number = 0;
+
+  /** ObservableLayerStore 的任何写操作都会触发这里（@ObjectLink + @Watch） */
+  private onLayersMutated(): void {
+    this.layerRev = this.layers.tick();
+  }
   /** 缩放滑杆的垂直偏移换算（纯函数，见 ImageEditor.sliderOffsetFor） */
   offsetForSlider: (baseSize: number, scale: number) => number =
     (baseSize: number, scale: number): number => (baseSize * scale) / 2 + 40;
@@ -91,6 +112,9 @@ export struct CanvasView {
   onCropPinchUpdate: (scale: number) => void = () => {};
   onCropHandleStart: () => void = () => {};
   onCropHandleDrag: (type: number, dx: number, dy: number) => void = () => {};
+  /** 拉直 / 水平 / 垂直校正滑杆（父组件负责自动缩放与历史入栈） */
+  onCropAdjust: (kind: string, value: number, mode: SliderChangeMode) => void =
+    (kind: string, value: number, mode: SliderChangeMode): void => {};
   /** 切换“铺满 / 完整显示”；disp 与导出语义由父组件统一刷新 */
   onFitModeChanged: (mode: string) => void = () => {};
 
@@ -165,6 +189,37 @@ export struct CanvasView {
     };
   }
 
+  /**
+   * 镜像/用户缩放的总 scale（镜像中心 = disp 中心：有偏移时镜像仍绕图片中心，与导出一致）
+   */
+  private cropScaleX(): number {
+    return this.state.cropScale * (this.state.cropFlipH ? -1 : 1);
+  }
+
+  private cropScaleY(): number {
+    return this.state.cropScale * (this.state.cropFlipV ? -1 : 1);
+  }
+
+  /**
+   * 透视预览矩阵（作用在 preview 尺寸的包装层上）
+   *
+   * 列主序 4x4：行3列0=index12（x→w），行3列1=index13（y→w）。
+   * 组件本地坐标以中心为 0，x∈[-W/2, W/2]，故系数 = −p·2/W。
+   */
+  private perspectiveMatrix(): matrix4.Matrix4Transit {
+    const pxn: number = (this.state.perspectiveH / 100) * 0.12;
+    const pyn: number = (this.state.perspectiveV / 100) * 0.12;
+    const W: number = this.state.previewW > 0 ? this.state.previewW : 1;
+    const H: number = this.state.previewH > 0 ? this.state.previewH : 1;
+    // init 接受长度 16 的列主序数组（copy() 在当前 SDK 不接受参数）
+    return matrix4.init([
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      -pxn * 2 / W, -pyn * 2 / H, 0, 1
+    ]);
+  }
+
   /** 文字阴影（按风格：0=无 1=阴影 2=发光 3=描边） */
   private textShadowFor(t: TextItem): ShadowOptions | ShadowOptions[] {
     if (t.style === 1) {
@@ -226,6 +281,31 @@ export struct CanvasView {
       })
   }
 
+  /** 角度夹到滑杆显示范围（cropAngle 经 90 按钮可能超出 ±45） */
+  private clampAngle45(a: number): number {
+    return a < -45 ? -45 : (a > 45 ? 45 : a);
+  }
+
+  /** 拉直 / 透视校正单条滑杆（松手/点按都回报，父组件决定是否入历史栈） */
+  @Builder
+  cropAdjustRow(label: string, kind: string, value: number, min: number, max: number) {
+    Row({ space: 8 }) {
+      Text(label)
+        .fontSize(11)
+        .fontColor('#F261616A')
+        .width(30)
+      Slider({ value: value, min: min, max: max, step: 1, style: SliderStyle.OutSet })
+        .layoutWeight(1)
+        .blockColor(Color.White)
+        .selectedColor('#C22F38')
+        .trackColor('#55FFFFFF')
+        .onChange((val: number, mode: SliderChangeMode) => {
+          this.onCropAdjust(kind, val, mode);
+        })
+    }
+    .height(30)
+  }
+
   /**
    * 文字图层渲染（阶段 5 第 3a 步抽出的 @Builder，3c 步整体搬进本组件）
    *
@@ -255,7 +335,7 @@ export struct CanvasView {
             .width(22)
             .height(22)
             .textAlign(TextAlign.Center)
-            .backgroundColor('#FF6B6B')
+            .backgroundColor('#C22F38')
             .borderRadius(11)
             .offset({ x: 8, y: -8 })
             // 22×22 的 ✕ 在真机上很难点中（尤其贴着边时）→ 放大触摸热区，视觉不变
@@ -268,7 +348,7 @@ export struct CanvasView {
       .alignContent(Alignment.TopEnd)
       // 选中态加虚线边框，提示可操作区域；未选中无视觉干扰
       .border(this.layers.selectedText() === idx
-        ? { width: 1, color: '#FF6B6B', style: BorderStyle.Dashed } : { width: 0 })
+        ? { width: 1, color: '#C22F38', style: BorderStyle.Dashed } : { width: 0 })
       .padding({ left: 6, right: 6, top: 4, bottom: 4 })
     }
     // Block：强制拦截触摸，全透明背景不再穿透到下层 Image
@@ -316,10 +396,18 @@ export struct CanvasView {
       PinchGesture()
         .onActionStart(() => {
           this.baseScale = t.scale;
+          // 双轨同步：渲染读 textSizeLive、导出读 t.scale，捏合必须两条轨一起动，
+          // 否则捏合后"看到的字号"与"保存的字号"不一致（textSizeLive 滞留旧值）
+          this.textSizeIdx = idx;
+          this.textSizeLive = t.scale;
         })
         .onActionUpdate((e: GestureEvent) => {
-          // 缩放范围（0.5~4）由 LayerStore.setTextScale 统一钳制
-          this.layers.setTextScale(idx, this.baseScale * e.scale);
+          // 缩放范围（0.5~4）与 LayerStore.setTextScale 的钳制保持一致：
+          // textSizeLive 必须存钳制后的值，否则捏过头时 UI 显示与导出再次分叉
+          let next: number = this.baseScale * e.scale;
+          next = Math.max(0.5, Math.min(4, next));
+          this.layers.setTextScale(idx, next);
+          this.textSizeLive = next;
           this.onLayersChanged();
         })
     )
@@ -327,11 +415,11 @@ export struct CanvasView {
     // 选中态滑杆：与文字本体同级的兄弟节点 → 只影响自身，不会挪动本体
     if (this.layers.selectedText() === idx) {
       Row({ space: 4 }) {
-        Text('A').fontSize(10).fontColor('#999999')
+        Text('A').fontSize(10).fontColor('#66666F')
         Slider({ value: t.scale, min: 0.5, max: 4, step: 0.1, style: SliderStyle.OutSet })
           .layoutWeight(1)
-          .blockColor('#FF6B6B')
-          .selectedColor('#FF6B6B')
+          .blockColor('#C22F38')
+          .selectedColor('#C22F38')
           .trackColor('#E0E0E0')
           .onChange((val: number) => {
             // 先写实时值（驱动本组件重绘），再写 store（供导出使用）
@@ -340,7 +428,7 @@ export struct CanvasView {
             this.layers.setTextScale(idx, val);
             this.onLayersChanged();
           })
-        Text('A').fontSize(18).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
+        Text('A').fontSize(18).fontColor('#C22F38').fontWeight(FontWeight.Bold)
       }
       .width(150)
       // 拖动中滑杆要跟本体一起走：本体渲染用的是 t.x/t.y + 实时增量，这里必须加同一份
@@ -401,7 +489,7 @@ export struct CanvasView {
             .width(22)
             .height(22)
             .textAlign(TextAlign.Center)
-            .backgroundColor('#FF6B6B')
+            .backgroundColor('#C22F38')
             .borderRadius(11)
             .position({ x: 90 * s.scale, y: -10 })
             // 同上：贴纸的 ✕ 也加大触摸热区
@@ -414,7 +502,7 @@ export struct CanvasView {
             Stack() {
               Text('⟳')
                 .fontSize(16)
-                .fontColor('#333333')
+                .fontColor('#FFFFFF')
                 .textAlign(TextAlign.Center)
             }
             .width(30)
@@ -481,7 +569,7 @@ export struct CanvasView {
       }
       // 选中态虚线边框
       .border(this.layers.selectedSticker() === idx
-        ? { width: 1, color: '#FF6B6B', style: BorderStyle.Dashed } : { width: 0 })
+        ? { width: 1, color: '#C22F38', style: BorderStyle.Dashed } : { width: 0 })
       // 记录选中贴纸的全局中心：旋转把手拖动时用它算 atan2
       .onAreaChange((oldValue: Area, newValue: Area) => {
         if (this.layers.selectedSticker() === idx) {
@@ -577,11 +665,11 @@ export struct CanvasView {
     if (this.layers.selectedSticker() === idx) {
       Column({ space: 2 }) {
         Row({ space: 4 }) {
-          Text('□').fontSize(10).fontColor('#999999')
+          Text('□').fontSize(10).fontColor('#66666F')
           Slider({ value: s.scale, min: 0.4, max: 5, step: 0.1, style: SliderStyle.OutSet })
             .layoutWeight(1)
-            .blockColor('#FF6B6B')
-            .selectedColor('#FF6B6B')
+            .blockColor('#C22F38')
+            .selectedColor('#C22F38')
             .trackColor('#E0E0E0')
             .onChange((val: number) => {
               // 先写实时值（驱动重绘），再写 store
@@ -590,7 +678,7 @@ export struct CanvasView {
               this.layers.setStickerScale(idx, val);
               this.onLayersChanged();
             })
-          Text('□').fontSize(18).fontColor('#FF6B6B').fontWeight(FontWeight.Bold)
+          Text('□').fontSize(18).fontColor('#C22F38').fontWeight(FontWeight.Bold)
         }
       }
       .width(170)
@@ -622,6 +710,15 @@ export struct CanvasView {
                 .height('100%')
                 .objectFit(ImageFit.Cover)
                 .blur(24)
+                // BUG5：模糊底层跟随同一套变换（平移/缩放/镜像/旋转），
+                // 否则模糊底与主图错位，旋转后边缘露出一圈不变的模糊条
+                .translate({ x: this.state.cropOffsetX, y: this.state.cropOffsetY })
+                .scale({
+                  x: this.cropScaleX(), y: this.cropScaleY(),
+                  centerX: this.state.disp.x + this.state.disp.w / 2,
+                  centerY: this.state.disp.y + this.state.disp.h / 2
+                })
+                .rotate({ angle: this.state.cropAngle })
                 .hitTestBehavior(HitTestMode.None)
             }
             Image(this.pixelMap)
@@ -630,7 +727,11 @@ export struct CanvasView {
               .objectFit(this.state.fitMode === FIT_MODE_CONTAIN
                 ? ImageFit.Contain : ImageFit.Cover)
               .translate({ x: this.state.cropOffsetX, y: this.state.cropOffsetY })
-              .scale({ x: this.state.cropScale, y: this.state.cropScale })
+              .scale({
+                x: this.cropScaleX(), y: this.cropScaleY(),
+                centerX: this.state.disp.x + this.state.disp.w / 2,
+                centerY: this.state.disp.y + this.state.disp.h / 2
+              })
               .rotate({ angle: this.state.cropAngle })
               .gesture(
                 PanGesture()
@@ -655,6 +756,8 @@ export struct CanvasView {
           .width(this.state.previewW)
           .height(this.state.previewH)
           .position({ x: -this.state.cropX, y: -this.state.cropY })
+          // 透视校正：作用在整个 preview 包装层（导出时在裁剪烘焙后跑 PerspectiveTask）
+          .transform(this.perspectiveMatrix())
         }
         .width(this.state.cropW)
         .height(this.state.cropH)
@@ -861,6 +964,7 @@ export struct CanvasView {
           .backgroundColor(CROP_GRID_COLOR)
           .position({ x: this.state.cropX + this.state.cropW * 2 / 3, y: this.state.cropY })
           .hitTestBehavior(HitTestMode.None)
+
       }
       if (!(this.tool === 'crop' && this.state.cropVisible)) {
         if (this.state.fitMode === FIT_MODE_CONTAIN) {
