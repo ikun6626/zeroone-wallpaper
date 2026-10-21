@@ -43,6 +43,7 @@ import { EditGuard } from '../utils/EditGuard';
 import { EditorCanvasModel, ObservableCanvasState } from '../editor/EditorCanvasModel';
 import { CanvasView } from './CanvasView';
 import { ImageCache } from '../net/ImageCache';
+import { AuthManager } from '../net/AuthManager';
 import { Haptics } from '../utils/Haptics';
 
 /**
@@ -1368,11 +1369,16 @@ export struct ImageEditor {
       promptAction.showToast({ message: '图片处理中，请稍候' });
       return;
     }
+    // 产品规则：导出到相册必须登录（浏览与编辑本身不要求登录）
+    if (!AuthManager.getInstance().isLoggedIn()) {
+      AuthManager.getInstance().showAuthOverlay();
+      promptAction.showToast({ message: '请先登录后再保存图片' });
+      return;
+    }
     const pm0: image.PixelMap | undefined = this.curPixelMap;
     if (pm0 === undefined) {
       return;
     }
-    // 导出无需登录（用户体系暂未开放，登录入口已隐藏）
     this.saving = true;
     const ctx: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
     let dest: string = '';
@@ -1532,6 +1538,11 @@ export struct ImageEditor {
               .enabled(!this.saving)
               .onClick((event: ClickEvent, result: SaveButtonOnClickResult) => {
                 if (result === SaveButtonOnClickResult.SUCCESS) {
+                  if (!AuthManager.getInstance().isLoggedIn()) {
+                    AuthManager.getInstance().showAuthOverlay();
+                    promptAction.showToast({ message: '请先登录后再保存图片' });
+                    return;
+                  }
                   this.exportAndSave();
                 }
               })
