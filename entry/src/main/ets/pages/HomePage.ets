@@ -195,6 +195,18 @@ export struct HomePage {
     return `${d.getMonth() + 1}月${d.getDate()}日 ${weekdays[d.getDay()]}`;
   }
 
+  /**
+   * 过滤后台自动生成的「第 0 期」占位标题
+   * 后台在 issueNo 缺失时会写成「每日精选 · 第 0 期」，这个占位文案不需要展示给用户。
+   */
+  private titleFor(w: Wallpaper): string {
+    const t: string = w.title.trim();
+    if (t.indexOf('第 0 期') >= 0 || t.indexOf('第0期') >= 0) {
+      return '';
+    }
+    return t;
+  }
+
   /** 本地兜底图（daily 项无本地兜底，返回 undefined） */
   private localOf(item: Wallpaper): Resource | undefined {
     return LocalWallpapers.getThumb(item.id);
@@ -298,8 +310,8 @@ export struct HomePage {
           .fontSize(22)
           .fontWeight(FontWeight.Bold)
           .fontColor('#FFFFFF')
-        if (w.title.length > 0) {
-          Text(w.title)
+        if (this.titleFor(w).length > 0) {
+          Text(this.titleFor(w))
             .fontSize(13)
             .fontColor('#E0E0E0')
             .maxLines(1)
