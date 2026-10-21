@@ -21,6 +21,11 @@ export class Wallpaper {
   category: string = '';
   /** 主色桶（后台图片分析脚本标注：蓝/青/绿/黄绿/橙黄/红/紫/粉/灰；本地壁纸为空串） */
   dominantColor: string = '';
+  /** 原图像素尺寸（后台回填；0 表示未知） */
+  width: number = 0;
+  height: number = 0;
+  /** 朝向：L 横 / P 竖 / S 方（后台回填；空串表示未知） */
+  orientation: string = '';
   /** 作者 */
   author: string = '';
   /** 上传时间戳（毫秒） */
