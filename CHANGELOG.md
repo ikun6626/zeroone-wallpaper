@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-10-21：修复每日精选第 22 期壁纸数据
+
+- 管理员后台登录验证通过；修复 wallpaper **1599**：
+  - 标题由「每日精选 · 第 0 期」清空；
+  - width/height：0×0 → **961×1440**；
+  - fileSize → 267535；orientation → P；dominantColor/brightness 已回填。
+- 公开接口复核：`/api/v1/daily/featured` 与 `/home/composition` 均返回第 22 期、title 空、wallpaperId=1599。
+- 根因仍在后台代码：`daily-featured.service.ts` 自动创建壁纸时使用 `第 ${dto.issueNo ?? 0} 期`，
+  issueNo 缺失会再次生成「第 0 期」；建议改为使用真实 issueNo 或留空。
+- App 侧 `titleFor()` 的第 0 期过滤保留，作为防御性兜底。
+
+---
+
 ## 2026-10-21：首页隐藏「第 0 期」占位标题
 
 - `HomePage.titleFor()` 过滤后台自动生成的「第 0 期 / 第0期」标题，Hero 不再展示该占位文案。
