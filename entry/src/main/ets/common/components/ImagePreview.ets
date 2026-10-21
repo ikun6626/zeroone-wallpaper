@@ -7,6 +7,7 @@ import { fileIo } from '@kit.CoreFileKit';
 import { ImageEditor } from './ImageEditor';
 import { PreferenceUtil } from '../utils/PreferenceUtil';
 import { WallpaperApi } from '../net/WallpaperApi';
+import { AuthManager } from '../net/AuthManager';
 import { ImageCache } from '../net/ImageCache';
 import { Haptics } from '../utils/Haptics';
 import { RemoteImage } from './RemoteImage';
@@ -444,6 +445,12 @@ export struct ImagePreview {
       .iconSize(22)
       .onClick((_: ClickEvent, result: SaveButtonOnClickResult) => {
         if (result === SaveButtonOnClickResult.SUCCESS && !this.saving) {
+          // 产品规则：保存图片必须登录；收藏等浏览行为仍允许游客使用
+          if (!AuthManager.getInstance().isLoggedIn()) {
+            AuthManager.getInstance().showAuthOverlay();
+            promptAction.showToast({ message: '请先登录后再保存图片' });
+            return;
+          }
           // 保存结果跟随当前显示方式（所见即所得）：铺满 → 按屏幕合成壁纸成品；适应 → 存原图。
           // 锁屏/桌面在保存后的步骤卡片里选（仅铺满模式弹该卡片，见 saveToAlbum）。
           this.saveToAlbum(WallpaperKind.LOCK);
@@ -482,7 +489,13 @@ export struct ImagePreview {
    */
   async saveToAlbum(guideKind: number): Promise<void> {
     if (this.saving) return;
-    // 保存无需登录（用户体系暂未开放）：本地壁纸直接读随包资源，云端壁纸先下载
+    // 兜底拦截：任何调用路径都要求登录后才能保存
+    if (!AuthManager.getInstance().isLoggedIn()) {
+      AuthManager.getInstance().showAuthOverlay();
+      promptAction.showToast({ message: '请先登录后再保存图片' });
+      return;
+    }
+    // 保存需登录（产品规则）：本地壁纸直接读随包资源，云端壁纸先下载
     const localRes: Resource | undefined = this.curLocalImg();
     if (localRes === undefined && this.remoteSrc().length === 0) {
       promptAction.showToast({ message: '图片资源缺失' });

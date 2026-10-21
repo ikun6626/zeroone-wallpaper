@@ -10,6 +10,7 @@ import { WallpaperDataSource } from '../common/store/WallpaperDataSource';
 import { showSetWallpaperDialog, WallpaperKind } from '../common/components/SetWallpaperGuide';
 import { PixelScope } from '../common/utils/PixelScope';
 import { PreferenceUtil } from '../common/utils/PreferenceUtil';
+import { AuthManager } from '../common/net/AuthManager';
 import matrix4 from '@ohos.matrix4';
 
 /**
@@ -838,6 +839,12 @@ export struct StickerPage {
     if (this.saving) {
       return;
     }
+    // 兜底：任何路径调用保存都要求登录；浏览与收藏不受影响
+    if (!AuthManager.getInstance().isLoggedIn()) {
+      AuthManager.getInstance().showAuthOverlay();
+      promptAction.showToast({ message: '请先登录后再保存图片' });
+      return;
+    }
     this.saving = true;
     // 先取消选中，避免选中虚线框/删除角标被截进成品图
     this.selectedId = -1;
@@ -1512,6 +1519,11 @@ export struct StickerPage {
         .enabled(!this.saving)
         .onClick((event: ClickEvent, result: SaveButtonOnClickResult) => {
           if (result === SaveButtonOnClickResult.SUCCESS) {
+            if (!AuthManager.getInstance().isLoggedIn()) {
+              AuthManager.getInstance().showAuthOverlay();
+              promptAction.showToast({ message: '请先登录后再保存图片' });
+              return;
+            }
             // 只保留一个保存入口：统一存 JPG，锁屏/桌面由用户去系统图库选择
             this.save(SaveTarget.ALBUM_JPG);
           }
