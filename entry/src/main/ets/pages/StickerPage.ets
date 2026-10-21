@@ -20,9 +20,9 @@ import matrix4 from '@ohos.matrix4';
  * 画板只是工作台的子集，且 `saveBoard()` 有实现却没有任何 UI 调用点
  * —— 用户感知为「画板没有保存键」。合并后：
  *
- *  ① 选背景（内置壁纸库 / 相册，也可不选背景直接做透明 PNG）
+ *  ① 选背景（内置壁纸库 / 相册）
  *  ② 贴贴纸（分类 + 收藏，拖拽 / 缩放 / 旋转 + 阴影 / 调色）
- *  ③ 导出（JPG / 透明 PNG / 锁屏图 / 桌面图）
+ *  ③ 保存到系统相册（统一 JPG；锁屏/桌面由用户去系统图库设置）
  *
  * 相比原两页新增：三步引导条、统一底部工具栏、图层列表、撤销/重做、贴纸收藏。
  *
@@ -104,18 +104,6 @@ enum SaveTarget {
   SET_LOCK = 2,     // 存为锁屏壁纸用图（保存后引导去图库设置）
   SET_HOME = 3      // 存为桌面壁纸用图（保存后引导去图库设置）
 }
-
-interface ExportTargetItem {
-  t: number;
-  label: string;
-}
-
-const EXPORT_TARGETS: ExportTargetItem[] = [
-  { t: SaveTarget.ALBUM_JPG, label: '存 JPG' },
-  { t: SaveTarget.ALBUM_PNG, label: '透明 PNG' },
-  { t: SaveTarget.SET_LOCK, label: '锁屏图' },
-  { t: SaveTarget.SET_HOME, label: '桌面图' }
-];
 
 const EXPORT_RATIOS: string[] = ['free', '9:16', '1:1', '3:4'];
 
@@ -395,7 +383,6 @@ export struct StickerPage {
 
   // ==================== 导出框（即最终保存范围） ====================
   @State exportRatio: string = '9:16';
-  @State exportTarget: number = SaveTarget.ALBUM_JPG;
   @State availW: number = 360;
   @State availH: number = 640;
   @State compW: number = 360;
@@ -909,7 +896,7 @@ export struct StickerPage {
           const f2 = fileIo.openSync(uri, fileIo.OpenMode.WRITE_ONLY);
           fileIo.copyFileSync(dest, f2.fd);
           fileIo.closeSync(f2);
-          promptAction.showToast({ message: '已保存到相册 ✅' });
+          promptAction.showToast({ message: '已保存到相册，请在系统图库中设为壁纸' });
         }
       } finally {
         PixelScope.safeRelease(pm);
@@ -1489,27 +1476,10 @@ export struct StickerPage {
     .padding({ top: 4, bottom: 10 })
   }
 
-  /** 导出面板：格式 + 比例 + SaveButton */
+  /** 导出面板：比例 + 一个保存按钮（统一保存 JPG 到相册） */
   @Builder
   exportPanel() {
     Column({ space: 10 }) {
-      Row({ space: 6 }) {
-        ForEach(EXPORT_TARGETS, (it: ExportTargetItem) => {
-          Text(it.label)
-            .fontSize(11)
-            .fontColor(this.exportTarget === it.t ? Color.White : '#A8A8B5')
-            .backgroundColor(this.exportTarget === it.t ? '#C9333D' : '#2A2B32')
-            .layoutWeight(1)
-            .height(28)
-            .textAlign(TextAlign.Center)
-            .borderRadius(14)
-            .onClick(() => {
-              this.exportTarget = it.t;
-            })
-        }, (it: ExportTargetItem) => `${it.t}`)
-      }
-      .width('100%')
-
       Row({ space: 6 }) {
         Text('比例')
           .fontSize(11)
@@ -1542,7 +1512,8 @@ export struct StickerPage {
         .enabled(!this.saving)
         .onClick((event: ClickEvent, result: SaveButtonOnClickResult) => {
           if (result === SaveButtonOnClickResult.SUCCESS) {
-            this.save(this.exportTarget);
+            // 只保留一个保存入口：统一存 JPG，锁屏/桌面由用户去系统图库选择
+            this.save(SaveTarget.ALBUM_JPG);
           }
         })
     }
@@ -1640,7 +1611,7 @@ export struct StickerPage {
                   .fontWeight(FontWeight.Medium)
                   .fontColor('#F2F2F5')
                 Text(this.bgKind === 0
-                  ? '点下方「背景」挑图，也可直接导出透明 PNG'
+                  ? '点下方「背景」挑图后保存'
                   : '拖动 · 双指缩放旋转')
                   .fontSize(11)
                   .fontColor('#C9C9D4')
