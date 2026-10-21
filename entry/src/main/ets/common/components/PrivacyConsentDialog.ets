@@ -84,9 +84,9 @@ export struct PrivacyConsentDialog {
           .fontWeight(FontWeight.Bold)
           .fontColor('#F0D08A')
           .width('100%')
-        Text('壁纸内容通过网络从开发者服务器获取。仅当你主动注册账号时才收集用户名与密码哈希；'
-          + '浏览壁纸不识别身份、不生成画像，未接入任何第三方广告或数据采集 SDK。'
-          + '收藏仅保存在本机，不做云端同步。')
+        Text('壁纸内容通过网络从开发者服务器获取。浏览与收藏无需登录；保存图片需登录账号，'
+          + '此时收集用户名与密码哈希。浏览不识别身份、不生成画像，'
+          + '未接入任何第三方广告或数据采集 SDK。收藏仅保存在本机，暂不与账号合并。')
           .fontSize(12.5)
           .fontColor('#B9B9C4')
           .lineHeight(19)
