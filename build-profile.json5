@@ -5,13 +5,26 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "C:\\Users\\gao\\.ohos\\config\\default_zeroone_Pt8mbrBVv5EvnNrbKEgxI7aBt997b1qAdTE4r8XBswE=.cer",
+          "storeFile": "<SIGNING_DIR>/release.p12",
+          "storePassword": "<REDACTED>",
+          "keyAlias": "zeroone",
+          "keyPassword": "<REDACTED>",
+          "signAlg": "SHA256withECDSA",
+          "profile": "<SIGNING_DIR>/fabuRelease.p7b",
+          "certpath": "<SIGNING_DIR>/zeroone.cer"
+        }
+      },
+      {
+        "name": "release",
+        "type": "HarmonyOS",
+        "material": {
+          "storeFile": "<SIGNING_DIR>/zeroonekey.p12",
+          "storePassword": "<REDACTED>",
           "keyAlias": "debugKey",
           "keyPassword": "<REDACTED>",
-          "profile": "C:\\Users\\gao\\.ohos\\config\\default_zeroone_Pt8mbrBVv5EvnNrbKEgxI7aBt997b1qAdTE4r8XBswE=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "C:\\Users\\gao\\.ohos\\config\\default_zeroone_Pt8mbrBVv5EvnNrbKEgxI7aBt997b1qAdTE4r8XBswE=.p12",
-          "storePassword": "<REDACTED>"
+          "profile": "<SIGNING_DIR>/zeroone-wallpaperRelease.p7b",
+          "certpath": "<SIGNING_DIR>/zeroone.cer"
         }
       }
     ],

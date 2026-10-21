@@ -11,7 +11,7 @@ export const FILTERS: string[] = BASE_FILTERS.concat(STYLE_FILTERS);
 /** 纹理效果 */
 export const TEXTURES: string[] = ['纸纹', '水彩纸纹', '噪点', '光晕', '污渍'];
 /** 文字颜色 */
-export const TEXT_COLORS: string[] = ['#FFFFFF', '#FF6B6B', '#333333', '#FFD700', '#4CAF50', '#2196F3'];
+export const TEXT_COLORS: string[] = ['#FFFFFF', '#C9333D', '#333333', '#FFD700', '#4CAF50', '#2196F3'];
 /** 文字风格 */
 export const TEXT_STYLES: string[] = ['无', '阴影', '发光', '描边'];
 /** 主题文字预置文案 */

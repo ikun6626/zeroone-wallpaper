@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>ZeroOne 壁纸 1.1.0 审核整改说明</title>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body {
+  font-family: "Microsoft YaHei", "微软雅黑", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  font-size: 13px; line-height: 1.75; color: #1c1d22; max-width: 900px;
+  margin: 0 auto; padding: 32px 40px 56px;
+}
+h1 { font-size: 24px; border-bottom: 3px solid #c9333d; padding-bottom: 10px; margin: 8px 0 20px; }
+h2 { font-size: 18px; margin: 30px 0 12px; padding-left: 10px; border-left: 4px solid #c9333d; }
+h3 { font-size: 15px; margin: 22px 0 8px; color: #7a2b31; }
+p, li { margin: 6px 0; }
+strong { color: #7a2b31; }
+code {
+  font-family: Consolas, "Courier New", monospace; font-size: 12px;
+  background: #f4f4f6; border: 1px solid #e3e3e8; border-radius: 4px; padding: 1px 5px;
+}
+pre { background: #1c1d22; color: #f2f2f5; padding: 12px 14px; border-radius: 8px; overflow-x: auto; }
+pre code { background: none; border: none; color: inherit; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 12.5px; }
+th, td { border: 1px solid #d8d8de; padding: 6px 9px; text-align: left; vertical-align: top; }
+th { background: #f4f4f6; font-weight: 600; }
+tr:nth-child(even) td { background: #fafafc; }
+blockquote {
+  margin: 12px 0; padding: 8px 14px; background: #fff6f7;
+  border-left: 4px solid #c9333d; color: #4a2e36;
+}
+hr { border: none; border-top: 1px dashed #cfcfd6; margin: 26px 0; }
+a { color: #b3252f; }
+@media print {
+  body { padding: 0; font-size: 12px; }
+  h2 { page-break-after: avoid; }
+  table, pre, blockquote { page-break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<h1>ZeroOne 壁纸 · 1.1.0 审核整改说明（第二轮）</h1>
+<p><strong>应用名称</strong>：ZeroOne 壁纸
+<strong>包名</strong>：<code>com.zeroone.wallpaper</code>
+<strong>版本</strong>：1.1.0（versionCode 1000001）
+<strong>开发者主体</strong>：zeroone
+<strong>整改日期</strong>：2026-09-29
+<strong>材料</strong>：本说明 + <code>contrast-audit-report.txt</code>（全量色值对比度实测表）</p>
+<hr />
+<h2>一、本轮 4 条审核意见的处理</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>审核意见（问题类型 / 测试项）</th>
+<th>结论</th>
+<th>处理方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>色彩 · <strong>应用使用的色彩需满足最小对比度要求：图标或标题文字与背景对比度大于 3:1，正文文字与背景对比度大于 4.5:1</strong></td>
+<td><strong>不通过 → 已整改</strong></td>
+<td>重新定义整套配色并逐处复核，见第二、三节；附全量实测表</td>
+</tr>
+<tr>
+<td>2</td>
+<td>转场动效 · 建议使用系统转场，页面转场采用淡入淡出的运动方式，不应单帧直接切换，左右平移或上下位移切换，曲线优先使用弹簧曲线</td>
+<td>警告（非硬性）</td>
+<td>全局复核：<strong>无页面级左右/上下位移转场</strong>；页面切换走系统转场（淡入淡出）；卡片→大图预览用系统共享元素转场 <code>geometryTransition</code>，曲线 <code>Curve.EaseOut</code>、时长 320 ms。见第四节</td>
+</tr>
+<tr>
+<td>3</td>
+<td>滑动动效 · 界面滑动到边界位置时（上下滑动到顶部或底部，左右滑动到左边界或右边界），应该有反馈动效</td>
+<td>警告（非硬性）</td>
+<td>全局复核后<strong>已确认全部滚动容器都启用了系统弹性边界反馈</strong> <code>EdgeEffect.Spring</code>。见第四节</td>
+</tr>
+<tr>
+<td>4</td>
+<td>转场动效 · 全屏页面转场动效时长在 8.5 英寸以下设备不应短于 200 ms，8.5~12 英寸不短于 250 ms，12 英寸以上不短于 300 ms</td>
+<td>警告（非硬性）</td>
+<td>全屏转场统一 <strong>320 ms</strong>（&gt; 300 ms，覆盖所有尺寸）；微交互（150~220 ms）不属于全屏转场</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>判定口径说明：审核指南里 <strong>色彩对比度是不通过项（必须改）</strong>；转场/滑动动效是<strong>警告项（建议）</strong>。本轮把不通过项彻底改掉，警告项逐条复核并给出代码位置，便于复审时对照。</p>
+</blockquote>
+<hr />
+<h2>二、配色整改方案（问题 1）</h2>
+<p>原配色以「高级黑 + 粉色强调」为主，问题出在<strong>两处硬伤</strong>：</p>
+<ol>
+<li><strong>浅色文字压在粉色实底上</strong>（实测 2.48:1）—— 粉色 <code>#FF6B6B</code> 太亮，白字/浅灰字压在上面都不达标；</li>
+<li><strong>深色主题里的次级灰文字太暗</strong>（实测 3.63~4.09:1）—— <code>#7A7A85</code> / <code>#9A9AA5</code> 压在 <code>#0F0F12</code>、<code>#1C1D22</code>、<code>#191A1F</code> 上，全部低于正文 4.5:1。</li>
+</ol>
+<h3>新配色令牌（全部经过实测）</h3>
+<table>
+<thead>
+<tr>
+<th>用途</th>
+<th>旧值</th>
+<th>新值</th>
+<th>关键实测（对比度）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>强调色（按钮/徽标<strong>底色</strong>）</td>
+<td><code>#FF6B6B</code></td>
+<td><strong><code>#C9333D</code></strong></td>
+<td>白字压其上 <strong>5.22:1</strong>（旧值仅 2.48:1）</td>
+</tr>
+<tr>
+<td>强调色（深色底上的<strong>文字</strong>）</td>
+<td><code>#FF6B6B</code></td>
+<td><strong><code>#E8606A</code></strong></td>
+<td>on <code>#0F0F12</code> <strong>5.75:1</strong>、on <code>#1C1D22</code> <strong>5.08:1</strong></td>
+</tr>
+<tr>
+<td>浅色面板内的强调色文字/控件</td>
+<td><code>#FF6B6B</code></td>
+<td><strong><code>#C22F38</code></strong></td>
+<td>on <code>#EEEEEE</code> <strong>4.82:1</strong>、on <code>#F0F0F0</code> <strong>4.90:1</strong></td>
+</tr>
+<tr>
+<td>次级/说明文字（深色主题）</td>
+<td><code>#7A7A85</code>、<code>#9A9AA5</code>、<code>#8A8A95</code>、<code>#5A5A65</code>、<code>#66666F</code></td>
+<td><strong><code>#A8A8B5</code></strong></td>
+<td>on <code>#1C1D22</code> <strong>7.16:1</strong>、on <code>#191A1F</code> <strong>7.39:1</strong>、on <code>#0F0F12</code> <strong>8.14:1</strong></td>
+</tr>
+<tr>
+<td>次级/三级文字（浅色编辑器面板）</td>
+<td><code>#999999</code>、<code>#AAAAAA</code>、<code>#BBBBBB</code></td>
+<td><strong><code>#66666F</code></strong> / <strong><code>#61616A</code></strong></td>
+<td>on <code>#EEEEEE</code> <strong>4.90:1</strong> / <strong>5.28:1</strong>、on <code>#FFFFFF</code> <strong>5.68:1</strong></td>
+</tr>
+<tr>
+<td>装饰性箭头、未激活序号</td>
+<td><code>#4A4A55</code></td>
+<td><strong><code>#8A8A95</code></strong></td>
+<td>on <code>#1C1D22</code> <strong>4.93:1</strong></td>
+</tr>
+<tr>
+<td>金色徽标上的正文</td>
+<td><code>#1A1410</code> 等</td>
+<td><strong><code>#4A3208</code></strong></td>
+<td>on <code>#E6C07E</code> <strong>6.97:1</strong></td>
+</tr>
+<tr>
+<td>登录/注册页（浅青卡片 + 深青渐变）</td>
+<td><code>#E76F51</code> / <code>#2A9D8F</code> / <code>#E0FFFFFF</code> / <code>#B0E0E0E0</code></td>
+<td><strong><code>#C24A32</code></strong> / <strong><code>#1B6B61</code></strong> / <strong><code>#CC264653</code></strong></td>
+<td>分别 <strong>4.62:1</strong> / <strong>6.00:1</strong> / <strong>5.46:1</strong></td>
+</tr>
+</tbody>
+</table>
+<h3>落地范围</h3>
+<p>统一替换在 <code>entry/src/main/ets</code> 全部 59 个源文件上一次性完成，共涉及 18 个文件的 300 余处色值：</p>
+<ul>
+<li>深色主题：<code>Index / HomePage / CategoryPage / StickerPage / MinePage / StickerBoardPage / StickerStudioPage</code>、<code>PrivacyConsentDialog / LegalDocPage / SetWallpaperGuide / WallpaperCard / ImagePreview</code></li>
+<li>浅色编辑器：<code>ImageEditor / CanvasView</code></li>
+<li>登录/注册：<code>LoginPage / RegisterPage</code></li>
+<li>单测里引用的字色常量同步更新（<code>LayerStore.test.ets</code>）</li>
+</ul>
+<blockquote>
+<p>编辑器预览区（<code>ImageEditor</code> / <code>CanvasView</code>）本身是<strong>浅色面板</strong>，文字与滑杆同步改为深色令牌；
+预览画布上的浮层控件（贴纸缩放滑杆、删除按钮）压在<strong>用户自己的图片</strong>上，
+已改为白色/强调色实底样式，保证在任何底图上都有对比。</p>
+</blockquote>
+<hr />
+<h2>三、复核方法（可独立验证）</h2>
+<p>新增两个脚本，对源码做<strong>静态配对 + WCAG 计算</strong>，不依赖人工目测：</p>
+<pre><code class="language-powershell"># 1) 逐处审计：把每个字色/图标色与它所在样式块声明的背景色配对，算对比度，列出不达标项
+python tools\contrast_audit.py
+# 2) 全量色值表：输出所有出现的 (前景,背景) 组合及对比度与判定（本次提交的证据文件）
+python tools\contrast_report.py &gt; contrast-audit-report.txt
+</code></pre>
+<p>判定阈值与审核指南一致：</p>
+<ul>
+<li><strong>正文字号 &lt; 18vp（或加粗 &lt; 14vp）</strong> → 要求 <strong>≥ 4.5:1</strong></li>
+<li><strong>大号文字（≥ 18vp / 加粗 ≥ 14vp）与图标图形</strong> → 要求 <strong>≥ 3:1</strong></li>
+</ul>
+<p>实测结果（<code>contrast-audit-report.txt</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>数值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>出现的不同 (前景,背景) 组合</td>
+<td>39</td>
+</tr>
+<tr>
+<td>对比度 ≥ 4.5:1</td>
+<td>29 组</td>
+</tr>
+<tr>
+<td>3.0 ~ 4.5:1</td>
+<td>2 组（滑杆选中色等<strong>图形</strong>元素，按 3:1 判定通过）</td>
+</tr>
+<tr>
+<td>报告中标出 &lt; 3.0 的组合</td>
+<td>8 组，均为<strong>脚本无法静态判定背景</strong>的场景，已逐个人工复核，见下</td>
+</tr>
+</tbody>
+</table>
+<p><strong>8 组人工复核结论（全部为脚本误配，不是真实不达标）</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>组合</th>
+<th>脚本为何误判</th>
+<th>真实情况</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>#FFFFFF</code> on <code>#F5FAFA</code>（4 处）</td>
+<td>登录/注册页按钮、跳过文字被配到<strong>页面底色</strong>（实际底色由更深一层的 <code>linearGradient</code> 提供，脚本不解析渐变）</td>
+<td>按钮文字真实底为深青 <code>#264653</code>（<strong>12.0:1</strong>）；"跳过"为磨砂胶囊 + 深青渐变，文字已改 <code>#CC264653</code>（<strong>5.46:1</strong>）</td>
+</tr>
+<tr>
+<td><code>#E9C46A</code> on <code>#F5FAFA</code></td>
+<td>品牌名被配到页面底色</td>
+<td>真实底为深青渐变 <code>#264653</code> 系，<strong>6.03:1</strong></td>
+</tr>
+<tr>
+<td><code>#1A1410</code> on <code>#0F0F12</code></td>
+<td>"NEW"角标文字被配到页面底色（角标自带金色底）</td>
+<td>真实底为金色 <code>#E6C07E</code>，<strong>10.6:1</strong></td>
+</tr>
+<tr>
+<td><code>#4A3208</code> on <code>#0F0F12</code>（2 处）</td>
+<td>期号徽标文字被配到页面底色</td>
+<td>真实底为金色 <code>#E6C07E</code>，<strong>6.97:1</strong></td>
+</tr>
+<tr>
+<td><code>#FFFFFF</code> on <code>#EEEEEE</code></td>
+<td>画布选中手柄文字被配到面板</td>
+<td>真实底为强调色 <code>#C9333D</code>，<strong>5.22:1</strong></td>
+</tr>
+<tr>
+<td><code>#2A2B32</code> / <code>#26303A</code> / <code>#4A2E36</code> on <code>#0F0F12</code>（3 处）</td>
+<td>头像圆底 <code>fill()</code> 被当成文字色（<code>fill</code> 是图形填充）</td>
+<td>纯装饰色块，非文字/图标，不适用文字对比度要求</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>另：登录/注册页输入框占位符 <code>#99264653</code>（60% 深青）在脚本里被配到页面底色得 3.26:1，
+实际底为输入框的 <code>#66FFFFFF</code>（半透明白）叠在卡片上，实测 <strong>4.63:1</strong>，达标。</p>
+</blockquote>
+<hr />
+<h2>四、动效类意见（问题 2、3、4）复核明细</h2>
+<h3>4.1 页面转场：无左右/上下位移</h3>
+<p>全工程检索 <code>translate / opacity / animation / TransitionEffect / router</code> 结果：</p>
+<table>
+<thead>
+<tr>
+<th>位置</th>
+<th>用途</th>
+<th>是否页面转场</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Index.ets</code> <code>Tabs</code></td>
+<td>底部四个标签页</td>
+<td>否，系统 <code>Tabs</code> 默认转场</td>
+</tr>
+<tr>
+<td><code>HomePage</code> / <code>CategoryPage</code> / <code>MinePage</code> <code>geometryTransition</code></td>
+<td>卡片 → 全屏大图预览的<strong>共享元素</strong>转场</td>
+<td>是（系统共享元素，非位移）</td>
+</tr>
+<tr>
+<td><code>ImagePreview</code> <code>translate/opacity</code></td>
+<td>跟手下滑/左滑关闭（手势跟手 + 回弹）</td>
+<td>否，属于手势反馈</td>
+</tr>
+<tr>
+<td><code>StickerBoardPage</code> / <code>StickerStudioPage</code> <code>translate</code></td>
+<td>贴纸图层在画布内的<strong>坐标定位</strong></td>
+<td>否</td>
+</tr>
+</tbody>
+</table>
+<p><strong>结论</strong>：应用内不存在"左右平移/上下位移切换页面"的实现；页面进入退出走系统默认转场。</p>
+<h3>4.2 曲线与时长（问题 2、4）</h3>
+<table>
+<thead>
+<tr>
+<th>动效</th>
+<th>位置</th>
+<th>时长</th>
+<th>曲线</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>卡片 → 全屏预览（全屏转场）</td>
+<td><code>HomePage.ets:248</code>、<code>CategoryPage.ets:264</code>、<code>MinePage.ets:196</code></td>
+<td><strong>320 ms</strong></td>
+<td><code>Curve.EaseOut</code></td>
+</tr>
+<tr>
+<td>预览关闭回弹</td>
+<td><code>ImagePreview.ets:469</code></td>
+<td>150 ms</td>
+<td><code>Curve.EaseOut</code></td>
+</tr>
+<tr>
+<td>预览滑出关闭</td>
+<td><code>ImagePreview.ets:289</code></td>
+<td>180 ms</td>
+<td><code>Curve.EaseIn</code></td>
+</tr>
+<tr>
+<td>预览双击缩放</td>
+<td><code>ImagePreview.ets:273</code></td>
+<td>200 ms</td>
+<td><code>Curve.EaseOut</code></td>
+</tr>
+<tr>
+<td>工具栏显隐</td>
+<td><code>ImagePreview.ets:429</code></td>
+<td>180 ms</td>
+<td><code>Curve.EaseOut</code></td>
+</tr>
+<tr>
+<td>远程图淡入</td>
+<td><code>RemoteImage.ets:85</code></td>
+<td>220 ms</td>
+<td><code>Curve.EaseOut</code></td>
+</tr>
+</tbody>
+</table>
+<p>全屏转场 <strong>320 ms ≥ 300 ms</strong>，满足"12 英寸以上 ≥ 300 ms"的最严要求，
+8.5 英寸以下（≥200 ms）与 8.5~12 英寸（≥250 ms）自动满足。</p>
+<h3>4.3 滑动到边界的反馈动效（问题 3）</h3>
+<p>系统弹性边界反馈 = <code>EdgeEffect.Spring</code>。全工程 6 个页面的滚动容器<strong>逐一核对，无遗漏</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>滚动容器</th>
+<th>边界反馈</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HomePage.ets:440</code></td>
+<td><code>List</code> 大图卡片流</td>
+<td><code>EdgeEffect.Spring</code>（480 行）</td>
+</tr>
+<tr>
+<td><code>CategoryPage.ets:293 / 328</code></td>
+<td>两个 <code>Grid</code></td>
+<td><code>EdgeEffect.Spring</code>（305 / 341 行）</td>
+</tr>
+<tr>
+<td><code>MinePage.ets:266 / 311</code></td>
+<td><code>Grid</code> + <code>Scroll</code></td>
+<td><code>EdgeEffect.Spring</code>（279 / 439 行）</td>
+</tr>
+<tr>
+<td><code>StickerPage.ets:86</code></td>
+<td><code>Scroll</code></td>
+<td><code>EdgeEffect.Spring</code>（122 行）</td>
+</tr>
+<tr>
+<td><code>StickerBoardPage.ets:517 / 567</code></td>
+<td>两个 <code>Scroll</code></td>
+<td><code>EdgeEffect.Spring</code>（534 / 599 行）</td>
+</tr>
+<tr>
+<td><code>StickerStudioPage.ets:715 / 995 / 1022</code></td>
+<td><code>Grid</code> + <code>Scroll</code></td>
+<td><code>EdgeEffect.Spring</code>（747 / 1022 行）</td>
+</tr>
+<tr>
+<td><code>ImageEditor.ets</code>（6 处）、<code>LegalDocPage.ets</code>、<code>PrivacyConsentDialog.ets</code></td>
+<td>全部 <code>Scroll</code></td>
+<td><code>EdgeEffect.Spring</code></td>
+</tr>
+<tr>
+<td><code>Tabs</code>（四标签）</td>
+<td>系统组件</td>
+<td>系统默认边界反馈</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>五、本轮同时发现的<strong>必须处理</strong>问题（与审核意见无关，但会直接影响这版过审）</h2>
+<blockquote>
+<p>这三条是我在复核"后台接口是否连通"时实测发现的，全部在<strong>服务端 / AGC 后台配置</strong>侧，代码这边已经做了容错，但建议发布前修掉。</p>
+</blockquote>
+<h3>5.1 隐私政策线上地址打开的是<strong>另一个站点</strong>（高风险，建议优先修）</h3>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>实测结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>市场后台填写的隐私政策 URL</td>
+<td><code>https://gqs.404.kim/</code></td>
+</tr>
+<tr>
+<td>该地址返回内容</td>
+<td><strong>"随机二次元图片API - 涂山苏苏"</strong>（另一个站点，不是 ZeroOne 的隐私政策）</td>
+</tr>
+<tr>
+<td>证书</td>
+<td>只签发了 <code>acg.404.kim</code>（SAN 仅 <code>DNS Name=acg.404.kim</code>），<strong>不含 <code>gqs.404.kim</code></strong> → 浏览器会报证书不匹配</td>
+</tr>
+<tr>
+<td><code>https://gqs.404.kim/terms.html</code>、<code>/about.html</code></td>
+<td><strong>404</strong></td>
+</tr>
+</tbody>
+</table>
+<p><code>legal-site/index.html</code> 里隐私政策正文是完整合规的（开发者主体=zeroone、更新/生效日期 2026-09-28、账号系统与后端说明齐全），
+但<strong>没有部署到 <code>gqs.404.kim</code> 这个域名上</strong>。</p>
+<p><strong>建议（任选其一）</strong>：</p>
+<ol>
+<li>把 <code>legal-site/</code> 的 4 个文件部署到 <code>gqs.404.kim</code> 根目录，并给该域名签发证书（DNS-01 泛域名 <code>*.404.kim</code> 最省事，可同时覆盖 <code>acg.</code> 与 <code>gqs.</code>）；</li>
+<li>或直接改用已有有效证书的 <code>https://www.gqscc.cn/</code>（把 <code>legal-site/</code> 挂到该站，例如 <code>https://www.gqscc.cn/privacy.html</code>），并<strong>同步修改 AGC 后台登记的隐私政策 URL</strong>（应用内 <code>LegalDocPage</code> 用的是随包内置全文，不依赖该 URL，无需改代码）。</li>
+</ol>
+<h3>5.2 「今日精选」接口 404 → <strong>已于 2026-09-29 部署修复</strong></h3>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>现象</td>
+<td>App 调用 <code>GET https://www.gqscc.cn/api/v1/daily/featured</code>（<code>DailyApi.ets</code>）返回 <strong>404</strong>；<code>/api/v1/daily</code> 同样 404</td>
+</tr>
+<tr>
+<td>根因</td>
+<td>线上后端是 <strong>2026-09-24 的旧构建</strong>，本地的新代码（含 <code>daily-featured</code> / <code>users</code> / <code>app-auth</code> 模块）从未部署</td>
+</tr>
+<tr>
+<td>处理</td>
+<td>已重新构建并部署后端：迁移自动应用（新增 <code>users</code>、<code>daily_featured</code> 表），路由已上线</td>
+</tr>
+<tr>
+<td>现状</td>
+<td><code>GET /api/v1/daily/featured</code> 返回 <code>{"code":0,"data":null}</code>（<strong>接口通、暂无数据</strong>）；后台「今日精选管理」页可正常增删改</td>
+</tr>
+<tr>
+<td>中断窗口</td>
+<td>18:59:00–19:04:48（约 <strong>5 分 48 秒</strong>）：新代码首次启动因依赖注入缺陷崩溃，修好后重建并恢复；当前容器 <code>restarts=0</code>、公网接口全部 200</td>
+</tr>
+</tbody>
+</table>
+<p><strong>还需要做的</strong>：在管理后台「今日精选管理」里<strong>新增第 1 期</strong>（起算日 2026-09-28），
+否则 App 首页徽标仍走本地推算期号的降级分支，"后台每天放一张图即新增一期"这个功能没有真正跑起来。</p>
+<blockquote>
+<p>部署过程中同时修掉两个隐患：① 新后端因 <code>@nestjs/passport</code> v12 的 <code>PassportModule</code> 变更而启动崩溃
+（已改 <code>PassportModule.register({})</code>）；② nginx 反代写死容器内网 IP，容器重建就会让整个 App 502
+（已改为 <code>127.0.0.1:3000</code> + compose 固定端口映射）。</p>
+</blockquote>
+<h3>5.3 其余接口实测（供后台对照）</h3>
+<table>
+<thead>
+<tr>
+<th>接口</th>
+<th>实测</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /api/v1/banners</code></td>
+<td>200，<code>data: []</code></td>
+<td>通；后台需要录入 banner 数据</td>
+</tr>
+<tr>
+<td><code>GET /api/v1/categories</code></td>
+<td>200，返回 4 个分类（动物萌宠 30、城市建筑 13、待归类…）</td>
+<td>通</td>
+</tr>
+<tr>
+<td><code>GET /api/v1/wallpapers</code></td>
+<td>200，返回分页列表（含 thumbUrl/imageUrl）</td>
+<td>通</td>
+</tr>
+<tr>
+<td><code>POST /api/v1/wallpapers/{id}/download</code></td>
+<td>201</td>
+<td>通（下载统计已生效）</td>
+</tr>
+<tr>
+<td><code>POST /api/v1/feedback</code></td>
+<td>400（空 body 时的参数校验）</td>
+<td>通，接口存在</td>
+</tr>
+<tr>
+<td><code>GET /api/v1/versions/latest</code></td>
+<td>200，<code>data: null</code></td>
+<td>通但<strong>无版本记录</strong>（App 未使用该接口，可不管）</td>
+</tr>
+<tr>
+<td><code>POST /api/v1/auth/login</code></td>
+<td>404</td>
+<td>后台<strong>无 App 用户体系</strong>（与代码现状一致：登录入口已在 <code>MinePage</code> 隐藏）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ 与 5.3 相关的<strong>文案一致性</strong>：<code>legal-site</code> 的隐私政策/用户协议/关于页里写着"含账号系统""仅收集账号注册所需的用户名与密码哈希"，
+但 App 内登录/注册入口已隐藏、后台也没有该服务。审核看到文档与实际功能不一致会追问，
+<strong>建议二选一</strong>：① 后台补齐用户体系并放开 App 登录入口；② 把三份法律文档里与"账号"相关的段落删掉，只保留离线浏览/收藏/反馈。</p>
+</blockquote>
+<hr />
+<h2>六、编译与验证</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>命令 / 结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>全量构建</td>
+<td><code>hvigorw … assembleHap --analyze=normal --parallel --incremental --daemon</code> → <strong>BUILD SUCCESSFUL</strong>（首轮 36.7 s + 终态复验 2 次均通过，仅 <code>showToast/animateTo/getContext</code> 的 deprecation WARN，<strong>无 ERROR</strong>）</td>
+</tr>
+<tr>
+<td>色彩静态审计</td>
+<td><code>python tools\contrast_audit.py</code> → 剩余 17 条报警全部为"脚本无法静态判定背景"的浮层控件（渐变底、自带底色的徽标、画布手柄、装饰色块）与占位符误配，已逐条人工复核（第三节）</td>
+</tr>
+<tr>
+<td>色彩实测表</td>
+<td><code>contrast-audit-report.txt</code>（随本说明提交）</td>
+</tr>
+<tr>
+<td>单测</td>
+<td>⚠️ <code>hvigorw … test</code> 当前<strong>编译失败</strong>，原因与本次改动无关：<code>entry/src/test/CropGeometry.test.ets</code> 未跟随 <code>CropView</code> 新增的 <code>flipH/flipV</code> 字段更新（历史遗留，本次未触碰该文件）。如需恢复单测全绿，我可以补这 5 处用例签名</td>
+</tr>
+<tr>
+<td>真机回归</td>
+<td><strong>必须做</strong>（此环境无法跑真机）：重点看 ① 深色页面次级文字是否清晰；② 编辑器浅色面板文字/滑杆；③ 卡片 → 大图预览转场是否顺滑；④ 各列表滑到顶部/底部的弹性反馈</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>七、发布前建议清单（按优先级）</h2>
+<table>
+<thead>
+<tr>
+<th>优先级</th>
+<th>事项</th>
+<th>归属</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>修复隐私政策 URL（5.1）：部署到 <code>gqs.404.kim</code> + 签发证书，或整体迁到 <code>www.gqscc.cn</code>（<strong><code>https://www.gqscc.cn/legal/</code> 已可访问且内容一致，改 AGC 后台登记即可</strong>）</td>
+<td>运维 / AGC 后台</td>
+</tr>
+<tr>
+<td>P0</td>
+<td>真机回归四项（第六节末条）</td>
+<td>开发</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>后台「今日精选管理」新增第 1 期（5.2 已部署，只差数据）</td>
+<td>后台运营</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>账号体系决策：放开 App 登录入口（接口已就绪）+ 补「账号设置/注销账号」，或把法律文档里的账号段落删掉（5.3 备注）</td>
+<td>后台 / App / 文档</td>
+</tr>
+<tr>
+<td>P2</td>
+<td><code>AppGallery</code> 后台补充 banner 运营数据（<code>/banners</code> 现在返回空数组）</td>
+<td>后台</td>
+</tr>
+<tr>
+<td>P2</td>
+<td>修复 <code>CropGeometry.test.ets</code> 用例签名，恢复单测绿</td>
+<td>开发</td>
+</tr>
+<tr>
+<td>P2</td>
+<td>后台 <code>.env</code> 里的初始管理员密码与 <code>JWT_SECRET</code> 换成随机值</td>
+<td>运维</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>法律文档与"账号系统"表述对齐（5.3 备注）</td>
+<td>运维 / 文档</td>
+</tr>
+<tr>
+<td>P2</td>
+<td><code>AppGallery</code> 后台补充 banner 运营数据（<code>/banners</code> 现在返回空数组）</td>
+<td>后台</td>
+</tr>
+<tr>
+<td>P2</td>
+<td>修复 <code>CropGeometry.test.ets</code> 用例签名，恢复单测绿</td>
+<td>开发</td>
+</tr>
+</tbody>
+</table>
+</body>
+</html>

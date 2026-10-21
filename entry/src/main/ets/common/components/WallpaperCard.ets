@@ -15,7 +15,7 @@ export struct WallpaperCard {
   @Prop wallpaper: Wallpaper = new Wallpaper();
   /** 是否已收藏（由父组件根据本地收藏列表计算） */
   @Prop isFav: boolean = false;
-  /** 本地兜底图（仅内置默认壁纸有值；云端壁纸传 undefined 用浅粉占位） */
+  /** 本地图片资源（目录里每条壁纸都有；取不到时传 undefined 走浅粉占位） */
   localImg: Resource | undefined = undefined;
   /** 收藏状态切换回调（父组件负责写本地 Preferences） */
   onToggle: (id: string, newFav: boolean) => void = (id: string, newFav: boolean) => {
@@ -23,39 +23,32 @@ export struct WallpaperCard {
   /** 点击图片打开预览回调（父组件负责展示全屏预览） */
   onPreview: (wallpaper: Wallpaper) => void = (wallpaper: Wallpaper) => {
   };
-  /** 网络图是否加载完成（完成前显示本地兜底图） */
-  @State remoteLoaded: boolean = false;
-  /** 网络图是否加载失败（失败则保持本地兜底图） */
-  @State remoteFailed: boolean = false;
 
   build() {
     Stack({ alignContent: Alignment.BottomEnd }) {
-      // ===== 图片层：本地兜底图 + 网络图 =====
+      // ===== 图片层 =====
+      // 云端壁纸：远程缩略图（thumbUrl），缺省时退回原图；加载前显示本地图或浅色占位。
+      // 离线兜底壁纸：随包内置本地资源。
       Stack() {
-        // 1) 本地兜底图（秒开、离线可用）
         if (this.localImg !== undefined) {
           Image(this.localImg)
             .width('100%')
             .height('100%')
             .objectFit(ImageFit.Cover)
         } else {
-          // 云端壁纸无本地图：先给一个浅粉色占位背景
+          // 取不到本地图：先给一个浅粉色占位背景
           Column().width('100%').height('100%').backgroundColor('#FFE9EC')
         }
-        // 2) 网络图（加载完成后覆盖本地图）
-        if (this.wallpaper.imageUrl.length > 0 && !this.remoteFailed) {
+        if (this.wallpaper.thumbUrl.length > 0) {
+          Image(this.wallpaper.thumbUrl)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+        } else if (this.wallpaper.imageUrl.length > 0) {
           Image(this.wallpaper.imageUrl)
             .width('100%')
             .height('100%')
             .objectFit(ImageFit.Cover)
-            .opacity(this.remoteLoaded ? 1 : 0)
-            .animation({ duration: 300, curve: Curve.EaseOut })
-            .onComplete(() => {
-              this.remoteLoaded = true;
-            })
-            .onError(() => {
-              this.remoteFailed = true;
-            })
         }
       }
       .width('100%')

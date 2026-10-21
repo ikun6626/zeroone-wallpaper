@@ -110,11 +110,11 @@ export default function layerStoreTest() {
       const s: LayerStore = new LayerStore();
       s.addText({ content: 'a', color: '#FFFFFF', x: 0, y: 0, scale: 1, style: 0 });
       s.markClean();
-      s.setTextColor(0, '#FF6B6B');
+      s.setTextColor(0, '#C9333D');
       s.setTextStyle(0, 2);
       s.setTextContent(0, 'hello');
       const t: TextItem = s.texts()[0];
-      expect(t.color).assertEqual('#FF6B6B');
+      expect(t.color).assertEqual('#C9333D');
       expect(t.style).assertEqual(2);
       expect(t.content).assertEqual('hello');
       expect(s.isDirty()).assertTrue();

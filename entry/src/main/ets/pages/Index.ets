@@ -5,13 +5,23 @@ import { MinePage } from './MinePage';
 import { PreferenceUtil } from '../common/utils/PreferenceUtil';
 import { WallpaperStore } from '../common/store/WallpaperStore';
 import { EditGuard } from '../common/utils/EditGuard';
+import { PrivacyConsentDialog } from '../common/components/PrivacyConsentDialog';
+import { PRIVACY_CONSENT_VERSION } from '../common/constants/LegalTexts';
+import { AuthManager } from '../common/net/AuthManager';
+import { ApiConfig } from '../common/net/ApiConfig';
+import { ImageCache } from '../common/net/ImageCache';
+import { LoginPage } from './LoginPage';
+import { RegisterPage } from './RegisterPage';
 import { common } from '@kit.AbilityKit';
 
 /**
  * Index —— 主入口（底部 Tabs 导航 · 高级黑）
  *
  * 四个标签页：🏠 首页（大图卡片流）、📚 合辑、🐾 贴纸（宠物贴图）、👤 我的
- * 主题：近黑背景 #0F0F12 · 强调粉 #FF6B6B · 精选金 #E6C07E
+ * 主题：近黑背景 #0F0F12 · 强调红 #C9333D（底色）/ #E8606A（深色底上的文字）· 精选金 #F0D08A
+ *
+ * 配色以应用市场「色彩对比度」审核项为准：正文文字与背景 ≥ 4.5:1，图标/标题 ≥ 3:1。
+ * 改动配色时请跑 tools/contrast_audit.py 复核（详见《整改说明-1.1.0-色彩与动效.md》）。
  */
 @Entry
 @Component
@@ -20,25 +30,68 @@ struct Index {
   @State currentIndex: number = 0;
   /** 全屏预览时隐藏底部 Tab 栏（沉浸式） */
   @State hideTabBar: boolean = false;
+  /** 首页「更多」请求序号（随每次点击自增，编码进 AppStorage 请求值） */
+  private pendingAlbumCounter: number = 0;
 
-  /** Tab 图标（emoji） */
-  private readonly tabIcons: string[] = ['🏠', '📚', '🐾', '👤'];
-  /** Tab 文字 */
-  private readonly tabLabels: string[] = ['首页', '合辑', '贴纸', '我的'];
+  /**
+   * 首次启动的隐私政策同意弹窗
+   *
+   * 审核硬要求（《审核指南》第 7.5 项）：「应用在首次启动、注册登录界面均未明确
+   * 提示用户阅读隐私政策，不符合相关法律法规要求。」
+   *
+   * 所以它是盖在 Tabs **之上**的全屏遮罩，而不是一条可以划走的提示 ——
+   * 未同意之前不得进入主界面。
+   */
+  @State showPrivacyConsent: boolean = false;
+
+  /** 已同意的隐私政策版本（存本地；与 PRIVACY_CONSENT_VERSION 比对） */
+  private readonly KEY_PRIVACY_CONSENT: string = 'privacy_consent_version';
+
+  /**
+   * 是否已登录（订阅 AppStorage，AuthManager 登录/登出时自动刷新）
+   * 用于"我的"页显示用户名/登出、保存流程判断是否放行。
+   */
+  @StorageLink(ApiConfig.APP_KEY_LOGGED_IN) isLoggedIn: boolean = false;
+  /**
+   * 是否显示登录/注册覆盖层（按需触发，不挡主界面）。
+   * 默认 false：所有人都能浏览预览图片。
+   * 由"我的"页登录按钮、或保存图片时未登录的引导设置为 true。
+   */
+  @StorageLink(ApiConfig.APP_KEY_AUTH_OVERLAY) showAuthOverlay: boolean = false;
+  /** 鉴权覆盖层当前显示登录还是注册 */
+  @State authView: 'login' | 'register' = 'login';
+
+  /** Tab 文字（「合辑」改名「图库」，对标 Cuto） */
+  private readonly tabLabels: string[] = ['首页', '图库', '贴纸', '我的'];
 
   aboutToAppear(): void {
     const ctx = getContext(this) as common.UIAbilityContext;
     PreferenceUtil.init(ctx);
-    // 统一数据源：先同步读本地缓存喂给 UI（秒开，不再先清空导致黑屏），
-    // 再后台刷新云数据（空表播种 / 云端不可用则内置数据兜底并标记离线态）。
-    // 四个子页面只订阅 AppStorage 状态键，不直接访问云库。
+    // 图片三级缓存初始化（cacheDir/remote-img）
+    ImageCache.init(ctx);
+
+    // 首次启动（或隐私政策文案更新后）先征得同意。
+    // 记的是"已同意的版本号"而不是 true —— 文案改了要重新征得同意，
+    // 这既是合规做法，也避免用户永远看不到更新后的政策。
+    this.showPrivacyConsent =
+      PreferenceUtil.getString(this.KEY_PRIVACY_CONSENT, '') !== PRIVACY_CONSENT_VERSION;
+
+    // 鉴权管理：从本地恢复 token、注入 HttpClient 回调、同步登录态到 AppStorage。
+    // 必须在 PreferenceUtil.init 之后调用（它依赖 PreferenceUtil 读写 token）。
+    AuthManager.getInstance().init();
+
+    // 统一数据源：壁纸目录已随包内置（LocalWallpapers），这里同步发布首屏 ——
+    // 没有网络请求、没有骨架屏等待、不存在"连不上云端"的兜底分支。
+    // 四个子页面只订阅 AppStorage 状态键，不直接访问数据源。
     WallpaperStore.getInstance().start();
   }
 
   /**
    * 系统返回键
    *
-   * 优先级交给最上层覆盖层：设为壁纸引导 → 图片编辑器 → 贴纸工作台/画板 → 大图预览。
+   * 优先级交给最上层覆盖层：设为壁纸引导 → 图片编辑器 → 大图预览。
+   * （贴纸专区已合并为「贴纸」Tab 页本身，不再是覆盖层，故不参与返回键接管。）
+   *
    * 它们返回 true 表示已消费（例如弹出"放弃编辑？"或关闭覆盖层）；
    * 没有任何覆盖层时才返回 false，走系统默认行为（退出应用）。
    *
@@ -49,48 +102,105 @@ struct Index {
     return EditGuard.handleBack();
   }
 
-  /** 底部 Tab 栏：选中粉色、未选中灰 */
+  /** Tab 系统符号图标（选中/未选中同一图标，靠颜色区分；对齐图标统一方案） */
+  private tabSymbol(index: number): Resource {
+    if (index === 1) return $r('sys.symbol.square_grid_2x2');
+    if (index === 2) return $r('sys.symbol.face_smiling');
+    if (index === 3) return $r('sys.symbol.person');
+    return $r('sys.symbol.house');
+  }
+
+  /** 底部 Tab 栏：选中金色、未选中灰（Cuto 风格系统符号图标，无 emoji） */
   @Builder
-  tabBarBuilder(index: number, icon: string, label: string) {
+  tabBarBuilder(index: number) {
     Column({ space: 2 }) {
-      Text(icon)
+      SymbolGlyph(this.tabSymbol(index))
+        .fontColor([this.currentIndex === index ? '#F0D08A' : '#A8A8B5'])
         .fontSize(22)
-      Text(label)
+      Text(this.tabLabels[index])
         .fontSize(10)
+        .fontColor(this.currentIndex === index ? '#F0D08A' : '#A8A8B5')
     }
     .width('100%')
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .foregroundColor(this.currentIndex === index ? '#FF6B6B' : '#7A7A85')
   }
 
   build() {
-    Tabs({ barPosition: BarPosition.End, index: this.currentIndex }) {
-      TabContent() {
-        HomePage({ hideTabBar: (v: boolean) => { this.hideTabBar = v; } })
-      }
-      .tabBar(this.tabBarBuilder(0, this.tabIcons[0], this.tabLabels[0]))
+    Stack() {
+      Tabs({ barPosition: BarPosition.End, index: this.currentIndex }) {
+        TabContent() {
+          HomePage({
+            hideTabBar: (v: boolean) => { this.hideTabBar = v; },
+            onMore: (slug: string) => {
+              // 事件总线写 AppStorage（不依赖跨 tab 的 @Prop 投递：实测后者在
+              // 「属性更新与 tab 显示同一帧」时 @Watch 不触发）
+              this.pendingAlbumCounter = this.pendingAlbumCounter + 1;
+              AppStorage.setOrCreate(ApiConfig.APP_KEY_OPEN_ALBUM,
+                `${this.pendingAlbumCounter}:${slug}`);
+              this.currentIndex = 1;
+            }
+          })
+        }
+        .tabBar(this.tabBarBuilder(0))
 
-      TabContent() {
-        CategoryPage({ hideTabBar: (v: boolean) => { this.hideTabBar = v; } })
-      }
-      .tabBar(this.tabBarBuilder(1, this.tabIcons[1], this.tabLabels[1]))
+        TabContent() {
+          CategoryPage({
+            hideTabBar: (v: boolean) => { this.hideTabBar = v; }
+          })
+        }
+        .tabBar(this.tabBarBuilder(1))
 
-      TabContent() {
-        StickerPage()
-      }
-      .tabBar(this.tabBarBuilder(2, this.tabIcons[2], this.tabLabels[2]))
+        TabContent() {
+          StickerPage()
+        }
+        .tabBar(this.tabBarBuilder(2))
 
-      TabContent() {
-        MinePage({ hideTabBar: (v: boolean) => { this.hideTabBar = v; } })
+        TabContent() {
+          MinePage({ hideTabBar: (v: boolean) => { this.hideTabBar = v; } })
+        }
+        .tabBar(this.tabBarBuilder(3))
       }
-      .tabBar(this.tabBarBuilder(3, this.tabIcons[3], this.tabLabels[3]))
+      .onChange((index: number) => {
+        this.currentIndex = index;
+      })
+      .barHeight(this.hideTabBar ? 0 : 56)
+      .backgroundColor('#111114')
+      .scrollable(false)
+
+      // 首次启动的隐私政策弹窗：盖在 Tabs **之上**，未同意不得进入主界面
+      if (this.showPrivacyConsent) {
+        PrivacyConsentDialog({
+          onAgree: () => {
+            PreferenceUtil.setString(this.KEY_PRIVACY_CONSENT, PRIVACY_CONSENT_VERSION);
+            this.showPrivacyConsent = false;
+          },
+          onReject: () => {
+            // 「不同意」必须真正退出应用 —— 只把弹窗关掉不算（审核要点 2）
+            const ctx = getContext(this) as common.UIAbilityContext;
+            ctx.terminateSelf();
+          }
+        })
+      }
+
+      // 登录/注册覆盖层：按需触发，不挡主界面。
+      // 默认不显示——所有人都能浏览预览图片。
+      // 由"我的"页登录按钮、或保存图片时未登录的引导设置为 true。
+      if (!this.showPrivacyConsent && this.showAuthOverlay) {
+        if (this.authView === 'login') {
+          LoginPage({
+            onGoRegister: () => { this.authView = 'register'; },
+            onClose: () => { AuthManager.getInstance().hideAuthOverlay(); }
+          })
+        } else {
+          RegisterPage({
+            onGoLogin: () => { this.authView = 'login'; },
+            onClose: () => { AuthManager.getInstance().hideAuthOverlay(); }
+          })
+        }
+      }
     }
-    .onChange((index: number) => {
-      this.currentIndex = index;
-    })
-    .barHeight(this.hideTabBar ? 0 : 56)
-    .backgroundColor('#111114')
-    .scrollable(false)
+    .width('100%')
+    .height('100%')
   }
 }

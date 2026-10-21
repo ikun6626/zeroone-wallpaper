@@ -4,11 +4,9 @@ import { fileIo } from '@kit.CoreFileKit';
 import { AppInfo } from '../utils/AppInfo';
 import { EditGuard } from '../utils/EditGuard';
 import { WallpaperStore } from '../store/WallpaperStore';
-import { CloudDBUtil } from '../utils/CloudDBUtil';
-import { CloudWallpapers } from '../constants/CloudWallpapers';
 import { Wallpaper } from '../../model/Wallpaper';
-import { BusinessError } from '@ohos.base';
-import { CloudProbe } from '../utils/CloudProbe';
+import { LocalWallpapers } from '../constants/LocalWallpapers';
+import { LEGAL_UPDATED_AT, PRIVACY_TEXTS, TERMS_TEXTS, ABOUT_TEXTS } from '../constants/LegalTexts';
 
 /** 文档类型 */
 enum DocKind {
@@ -38,114 +36,58 @@ export struct LegalDocPage {
   private backId: number = -1;
 
   /** 更新日期（改文案时同步改这里，审核会看） */
-  private readonly updatedAt: string = '2026-01-01';
-
-  private readonly privacy: string[] = [
-    '更新日期：2026-01-01\n生效日期：2026-01-01',
-    '一、我们收集哪些信息\nZeroOne 壁纸不需要注册或登录，不收集你的姓名、手机号、身份证号、通讯录、位置等任何个人身份信息。',
-    '二、信息如何存储\n1. 你的收藏记录仅保存在本机（应用私有存储），不会上传到服务器，卸载应用即被删除。\n2. 应用会在本机保存一份壁纸列表缓存，用于加快下次启动速度，可随时在「关于」中清除。',
-    '三、权限使用说明\n1. 保存到相册：仅在您主动点击保存按钮时，通过系统安全控件（SaveButton）获得一次性的临时写入授权，用于把图片存入系统相册。应用不会读取你的相册内容用于其他用途，也不会在后台写入。\n2. 网络访问：用于从云端获取壁纸列表与图片资源。\n3. 传感器（方向）：仅在动态壁纸预览时用于实现轻微视差效果，可在预览界面直接退出。',
-    '四、第三方服务\n壁纸数据托管于华为 AppGallery Connect 云数据库/云存储。图片内容由上述服务按网络请求正常传输，不包含你的个人信息。',
-    '五、我们不会做的事\n不向任何第三方出售、出租或分享你的个人信息；不进行用户画像与个性化广告推送；不索取与功能无关的权限。',
-    '六、未成年人保护\n本应用内容适合所有年龄段，不设付费与社交功能，不收集任何用户身份信息。',
-    '七、政策更新\n如本政策发生变更，我们会在应用内更新本页内容并调整更新日期。',
-    '八、联系我们\n如对本政策有任何疑问，请联系：zeroone@example.com。'
-  ];
-
-  private readonly terms: string[] = [
-    '更新日期：2026-01-01',
-    '一、服务内容\nZeroOne 壁纸为你提供壁纸浏览、收藏、图片编辑与贴纸创作等本机功能。应用内所有功能均可免费使用。',
-    '二、使用规范\n1. 请勿将本应用用于任何违法或侵害他人权益的用途；\n2. 请勿对应用进行反向工程、恶意篡改或传播篡改版本；\n3. 使用图片编辑与贴纸功能时，请确保你对所用素材拥有合法权利。',
-    '三、知识产权\n1. 应用界面、图标、文案及自研功能归开发者所有；\n2. 内置壁纸图片来自公开免费图库（详见「关于与版权」），版权归原作者所有；\n3. 你使用本应用创作的图片归你所有，应用不会上传或留存你的创作内容。',
-    '四、免责声明\n1. 壁纸图片来自第三方免费图库，我们已尽力筛选合规内容，如仍有不当内容请通过邮箱告知，我们会第一时间下架；\n2. 因网络、系统或设备原因导致的功能不可用，我们会尽力修复，但不承担由此产生的间接损失。',
-    '五、关于"设为壁纸"\n受系统限制，第三方应用无法直接替换系统壁纸。应用提供"存为锁屏图/桌面图"并给出设置步骤引导，最终设置需你在系统「图库」中完成。',
-    '六、协议变更\n协议如有更新将在本页公布，继续使用即视为接受更新后的条款。',
-    '七、联系方式\nzeroone@example.com'
-  ];
-
-  private readonly about: string[] = [
-    'ZeroOne 壁纸 —— 宠物主题的高级壁纸商城：精选猫猫狗狗与萌宠壁纸，穿插自然风光、极简风格等好图，并支持抠图贴纸与图片创作。',
-    '图片来源与版权声明\n1. 内置占位壁纸来自公开免费图库（Picsum / Pexels / Wikimedia Commons 等），版权归原作者所有；\n2. 应用内图片仅用于壁纸展示与个人使用，请勿用于商业用途；\n3. 如你是某张图片的权利人且不希望它出现在本应用中，请邮件联系，我们会在核实后立即移除。',
-    '第三方组件\n本应用使用 HarmonyOS 官方能力（ArkUI、Image Kit、Cloud Foundation Kit 等），未使用任何第三方广告或数据采集 SDK。',
-    '备案与主体信息\n应用名称：ZeroOne 壁纸\n开发者：ZeroOne\n联系邮箱：zeroone@example.com\n（正式上架前请在此补充备案号/统一社会信用代码等主体信息）'
-  ];
+  private readonly updatedAt: string = LEGAL_UPDATED_AT;
 
   /**
-   * 写入云端壁纸数据（长按版本号触发，开发期工具，上架前可移除）
+   * 三段法务文本统一来自 common/constants/LegalTexts.ets
    *
-   * 之所以做成应用内入口而不是手工导 CSV：字段名大小写、Long 类型、主键唯一性
-   * 全由 SDK 保证，一批一次成型；而且是 upsert 语义，重复执行不会产生重复记录。
+   * 首次启动的隐私弹窗（PrivacyConsentDialog）和本页共用同一份文案 ——
+   * 如果各存一份，改文案时必然漏掉一边，而审核会对照两处，不一致会被驳。
    */
-  private confirmSeed(): void {
-    const total: number = CloudWallpapers.all().length;
-    promptAction.showDialog({
-      title: '写入云端壁纸数据',
-      message: `将把 ${total} 条壁纸记录写入云数据库（同 id 覆盖，可重复执行）。确认开始？`,
-      buttons: [
-        { text: '取消', color: '#666666' },
-        { text: '开始写入', color: '#FF6B6B' }
-      ]
-    }).then((result: promptAction.ShowDialogSuccessResponse) => {
-      if (result.index === 1) {
-        this.seedCloud();
-      }
-    }).catch(() => {
-      // 取消或弹窗异常：什么都不做
-    });
-  }
+  private readonly privacy: string[] = PRIVACY_TEXTS;
+  private readonly terms: string[] = TERMS_TEXTS;
+  private readonly about: string[] = ABOUT_TEXTS;
 
-  /** 执行播种并提示结果 */
-  private async seedCloud(): Promise<void> {
-    // 分三步自检，任一步失败就停并把报告摆出来：
-    //  ① 最小实体探针  —— 判断对象类型名/存储区是否正确
-    //  ② 正式实体读取  —— 判断 schema 与读权限
-    //  ③ 批量写入      —— 判断写权限与字段类型
+  /**
+   * 本地数据自检（长按版本号触发）
+   *
+   * 离线版没有云端可探，这里校验"目录 ↔ 本地资源"是否对得上：
+   * 任何一条壁纸在 media 里找不到对应资源名，那一格的图就会是空白 ——
+   * 内置 73 条时肉眼很难发现漏配，所以留一个一键自检入口。
+   */
+  private checkLocalData(): void {
+    const all: Wallpaper[] = LocalWallpapers.ALL;
+    const missing: string[] = [];
+    const dup: string[] = [];
+    const seen: Set<string> = new Set<string>();
+
+    for (const w of all) {
+      if (LocalWallpapers.getLocalImg(w.id) === undefined) {
+        missing.push(w.id);
+      }
+      if (seen.has(w.id)) {
+        dup.push(w.id);
+      }
+      seen.add(w.id);
+    }
+
     const report: string[] = [];
-    let blocked: boolean = false;
+    report.push(`① 壁纸目录：${all.length} 条`);
+    report.push(missing.length === 0
+      ? '② 图片资源：全部可解析 ✔'
+      : `② 缺图 ${missing.length} 条：${missing.slice(0, 5).join('、')}${missing.length > 5 ? ' …' : ''}`);
+    report.push(dup.length === 0
+      ? '③ id 唯一性：无重复 ✔'
+      : `③ id 重复 ${dup.length} 条：${dup.slice(0, 5).join('、')}`);
+    report.push('④ 网络依赖：云端壁纸需联网，本地兜底目录可离线浏览');
 
-    const probe: string = await CloudProbe.probe();
-    if (probe.length === 0) {
-      report.push('① 对象类型 wallpapers 可访问 ✔');
-    } else {
-      report.push(`① 最小探针失败（说明表名或存储区不对）：${probe}`);
-      blocked = true;
-    }
-
-    if (!blocked) {
-      try {
-        const existing: Wallpaper[] = await CloudDBUtil.getAllWallpapers();
-        report.push(`② 正式实体可读，云端现有 ${existing.length} 条`);
-      } catch (e) {
-        const err: BusinessError = e as BusinessError;
-        console.error(`seedCloud read failed: ${JSON.stringify(e)}`);
-        report.push(`② 正式实体读取失败（schema 或读权限问题）：code=${err.code} ${err.message}`);
-        blocked = true;
-      }
-    }
-
-    if (!blocked) {
-      try {
-        const count: number = await CloudDBUtil.seedWallpapers(CloudWallpapers.all());
-        report.push(`③ 写入成功 ${count} 条，回首页下拉刷新即可看到`);
-      } catch (e) {
-        const err: BusinessError = e as BusinessError;
-        console.error(`seedCloud write failed: ${JSON.stringify(e)}`);
-        report.push(`③ 写入失败（写权限或字段类型问题）：code=${err.code} ${err.message}`);
-        blocked = true;
-      }
-    }
-
-    if (blocked) {
-      promptAction.showDialog({
-        title: '云端自检结果',
-        message: report.join('\n\n'),
-        buttons: [{ text: '知道了', color: '#FF6B6B' }]
-      }).catch(() => {
-        // 弹窗异常时忽略：报告已经写进日志
-      });
-    } else {
-      promptAction.showToast({ message: report[report.length - 1] });
-    }
+    promptAction.showDialog({
+      title: '本地数据自检',
+      message: report.join('\n\n'),
+      buttons: [{ text: '知道了', color: '#C9333D' }]
+    }).catch(() => {
+      // 弹窗异常时忽略：报告已经写进日志
+    });
   }
 
   aboutToAppear(): void {
@@ -195,7 +137,7 @@ export struct LegalDocPage {
   docTab(label: string, kind: number) {
     Text(label)
       .fontSize(13)
-      .fontColor(this.kind === kind ? '#1A1410' : '#9A9AA5')
+      .fontColor(this.kind === kind ? '#1A1410' : '#A8A8B5')
       .backgroundColor(this.kind === kind ? '#E6C07E' : '#1C1D22')
       .padding({ left: 14, right: 14, top: 7, bottom: 7 })
       .borderRadius(14)
@@ -223,7 +165,7 @@ export struct LegalDocPage {
       Row() {
         Text('‹')
           .fontSize(26)
-          .fontColor('#FF6B6B')
+          .fontColor('#C9333D')
           .width(40)
           .height(40)
           .textAlign(TextAlign.Center)
@@ -263,14 +205,14 @@ export struct LegalDocPage {
             Row() {
               Text('当前版本')
                 .fontSize(13)
-                .fontColor('#9A9AA5')
+                .fontColor('#A8A8B5')
                 .layoutWeight(1)
           Text(AppInfo.versionFull())
-            // 开发期工具：长按版本号把种子数据写进云数据库（上架前可移除）
+            // 开发期工具：长按版本号做一次本地数据自检（目录 ↔ 图片资源是否对得上）
             .gesture(
               LongPressGesture()
                 .onAction(() => {
-                  this.confirmSeed();
+                  this.checkLocalData();
                 })
             )
                 .fontSize(13)
@@ -291,15 +233,15 @@ export struct LegalDocPage {
                   .fontColor('#F2F2F5')
                 Text('清理壁纸列表缓存与导出残留文件，不会删除收藏')
                   .fontSize(11)
-                  .fontColor('#7A7A85')
+                  .fontColor('#A8A8B5')
               }
               .alignItems(HorizontalAlign.Start)
               .layoutWeight(1)
               Text('清理')
                 .fontSize(13)
-                .fontColor('#FF6B6B')
+                .fontColor('#E8606A')
                 .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-                .backgroundColor('#3A2530')
+                .backgroundColor('#4A2E36')
                 .borderRadius(12)
                 .onClick(() => {
                   this.clearCache();
@@ -317,6 +259,7 @@ export struct LegalDocPage {
       .scrollBar(BarState.Off)
       .layoutWeight(1)
       .align(Alignment.Top)
+      .edgeEffect(EdgeEffect.Spring)
     }
     .width('100%')
     .height('100%')

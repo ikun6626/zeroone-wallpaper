@@ -1,22 +1,31 @@
 # ZeroOne 壁纸商城 App —— 交付说明
 
-> HarmonyOS NEXT（ArkTS + ArkUI）+ 华为 AGC 云服务（云数据库）
-> 最后同步：2026-09-12
+> HarmonyOS NEXT（ArkTS + ArkUI）· **全离线应用**（壁纸与素材随包内置，不访问网络、无任何权限）
+> 最后同步：2026-09-13（已从 AGC 云端版改造为离线版）
+
+> 🗄️ **改造说明**：此前工程接的是华为 AGC 云数据库 + 云存储（`@kit.CloudFoundationKit`），
+> 已整体改为**随包内置的本地资源**。相关变化：
+> - 新增 `common/constants/LocalWallpapers.ets`（295 条壁纸目录 + 本地资源解析）
+> - 删除 `CloudDBUtil` / `CloudStorageUtil` / `CloudProbe` / `CloudWallpapers` / `DefaultWallpapers`
+> - `module.json5` 移除 `ohos.permission.INTERNET`，应用**不申请任何权限**
+> - `WallpaperStore` 退化为**一次性发布全量目录**（不再分页；无网络、无缓存、无离线兜底分支）
+> - **第二章「华为 AGC 控制台配置」已作废**，云端相关操作详见已归档的
+>   `AGC-云数据库接入步骤.md`（仅在未来要切回云端时参考）
 
 ## 一、代码结构
 
 ```
 entry/src/main/ets/
 ├── model/
-│   └── Wallpaper.ets                    # 壁纸实体（与云表字段一一对应，10 字段）
+│   └── Wallpaper.ets                    # 壁纸实体（纯本地模型，不再继承云实体基类）
 ├── common/
 │   ├── components/
 │   │   ├── ImagePreview.ets             # 全屏预览（缩放/滑动关闭/锁屏桌面模拟/保存/设为锁屏桌面/进编辑器）
 │   │   ├── ImageEditor.ets              # 图片编辑器（旋转/裁剪/滤镜/纹理/艺术字/贴纸/导出）
 │   │   ├── SetWallpaperGuide.ets        # 「设为壁纸」闭环：步骤文案 + 弹窗 + 引导卡片 + 复制步骤
-│   │   └── LegalDocPage.ets             # 隐私政策 / 用户协议 / 关于与版权 / 清除缓存
+│   │   └── LegalDocPage.ets             # 隐私政策 / 用户协议 / 关于与版权 / 清除缓存 / 本地数据自检
 │   ├── constants/
-│   │   └── DefaultWallpapers.ets        # 分类、预置标签、内置 22 张壁纸与本地图映射
+│   │   └── LocalWallpapers.ets          # 分类、预置标签、295 条壁纸目录、本地原图/缩略图映射
 │   ├── editor/
 │   │   ├── ImageComposer.ets            # 离屏合成导出（**所见即所得**的唯一出处）
 │   │   ├── FilterTask.ets               # 20 滤镜 + 5 纹理（@Concurrent，跑在 TaskPool）
@@ -25,17 +34,16 @@ entry/src/main/ets/
 │   │   ├── EditorModels.ets             # TextItem / StickerItem（含 angle）/ DispRect
 │   │   └── EditorConstants.ets          # 滤镜名、纹理名、文案库、颜色表
 │   ├── store/
-│   │   └── WallpaperStore.ets           # 唯一数据源：缓存优先 + 分页 + 状态键 + retry
+│   │   └── WallpaperStore.ets           # 唯一数据源：全量目录发布 + 状态键 + retry
 │   └── utils/
-│       ├── CloudDBUtil.ets              # 云数据库查询/分页/按分类/播种
 │       ├── PreferenceUtil.ets           # 收藏持久化 + favoriteIds 广播 + 字符串 KV
 │       ├── PixelScope.ets               # PixelMap 生命周期作用域（防 OOM）
 │       ├── EditGuard.ets                # 返回键拦截栈 + 放弃编辑确认
 │       └── AppInfo.ets                  # 真实版本号
 ├── pages/
 │   ├── Index.ets                        # 4 个 Tab（🏠首页 📚合辑 🐾贴纸 👤我的）+ 返回键分发
-│   ├── HomePage.ets                     # 大图卡片流：骨架屏/错误重试/离线提示/上拉分页
-│   ├── CategoryPage.ets                 # 合辑墙 + 等比网格详情
+│   ├── HomePage.ets                     # 大图卡片流（LazyForEach 懒加载）
+│   ├── CategoryPage.ets                 # 合辑墙 + 等比网格详情（LazyForEach）
 │   ├── StickerPage.ets                  # 贴纸枢纽（工作台 / 画板）
 │   ├── StickerStudioPage.ets            # 贴纸工作台（选背景 → 合成 → 存图/锁屏图/桌面图）
 │   ├── StickerBoardPage.ets             # 多贴纸画板
@@ -46,7 +54,11 @@ entry/src/main/ets/
 > `PhotoEditorPage` 与 `common/photoeditor/` 三件套）以及记录它们的 `DEPRECATED.md`，
 > 已于 2026-09-12 全部删除；工程已纳入 git，回滚靠版本历史而不是留档文件。
 
-## 二、华为 AGC 控制台配置（一次性，约 10~15 分钟）
+## 二、华为 AGC 控制台配置（⛔ 已作废 · 仅存档）
+
+> **本章对应的是"图片放云端"的旧方案，当前工程已经不需要做任何 AGC 配置。**
+> 保留在此仅作历史参考；若将来要切回云端，请直接看已归档的
+> `AGC-云数据库接入步骤.md`（那份更完整，含全部实测踩坑记录）。
 
 > 控制台：<https://developer.huawei.com/consumer/cn/service/josp/agc/index.html>
 
@@ -112,8 +124,8 @@ $env:DEVECO_SDK_HOME = 'E:\DevEco Studio\sdk'
 
 ## 三、运行与验证清单
 
-> ⚠️ **云服务在模拟器/预览器上不可用**（华为限制），云相关必须真机验证；
-> UI、收藏、内置壁纸、编辑导出在模拟器上也能验。
+> ✅ **离线版没有这个限制**：应用不访问网络，模拟器 / 预览器 / 真机行为一致，
+> 壁纸浏览、收藏、贴纸、编辑导出全部能在模拟器上验证，不需要真机也不需要云调试。
 > ⚠️ 每次改完先**卸载旧包 → Clean → Run**，确认 `Install Successfully`，否则你看到的可能还是旧界面。
 
 **数据层**
@@ -153,14 +165,20 @@ $env:DEVECO_SDK_HOME = 'E:\DevEco Studio\sdk'
 - [ ] **权限声明**：`module.json5` 里**不要**声明 `ohos.permission.WRITE_IMAGEVIDEO`（声明了会安装失败 `9568289`；保存相册走 SaveButton 临时授权，无需声明）；
 - [ ] **图片版权**：内置壁纸来自公开免费图库，已在内置文档中署名并给出侵权下架邮箱；**商用前请逐张确认授权范围**；
 - [ ] **应用图标与截图**：`AppScope/resources` 图标、市场截图与介绍文案（文案里不要出现"一键设为壁纸"这类做不到的承诺）；
-- [ ] **隐私标签**：AGC 后台按真实情况填写（本应用不采集个人数据）；
+- [ ] **隐私标签**：AGC 后台按真实情况填写 —— 本应用**不采集任何个人数据、不联网、不申请任何权限**，属最简声明；
 - [ ] **真机回归**：完成第三节 14 项验证。
 
 ## 五、已知取舍
 
 - **"设为壁纸"的最后一步必须由用户在图库完成**：HarmonyOS NEXT 未向三方应用开放直接换壁纸的能力（`@ohos.wallpaper` 自 API 9 起废弃）。应用的做法是"保存到相册 + 给出步骤引导 + 可复制步骤"，**不承诺一键设置**；将来若系统开放，只需在 `SetWallpaperGuide` 里加能力探测即可平滑升级。
 - **导出与预览的排版无法 100% 逐像素一致**：Canvas 没有"增量测宽"接口，且 ArkUI 断行规则不完全公开。CJK 短语、emoji（代理对安全）、英文整词已对齐；要 100% 一致只能改成截屏导出，但那会丢失原分辨率并带上灰边，故不采用。
-- **内置壁纸为占位图**（picsum + 自有宠物图）：替换 `resources/base/media/` 下的图片与 `DefaultWallpapers.ets` 即可。
-- **`ratingSum/ratingCount` 字段保留但 UI 未使用**：评分系统已按需求移除；字段保留是为了与云端 schema 一致（缓存 DTO 也会往返这两个字段，避免回写云端时被清零）。
-- **缩略图**：客户端暂用原图 URL 充当缩略图；若后续图库变大，可用云函数生成缩略图。
+- **内置壁纸共 295 张**（283 张真实照片 + 12 张个人宠物图）：全部随包内置在 `resources/base/media/`，
+  清单与资源映射在 `LocalWallpapers.ets`（由脚本生成，勿手改）。**加图流程**：
+  `tools/gen_local_catalog.py` 重新生成目录 → 重新打包发版（离线版加图必须发版）。
+- **`ratingSum/ratingCount` 字段保留但 UI 未使用**：评分系统已按需求移除；字段保留只是为了让
+  模型与导出流程的结构不变，与任何云端 schema 已无关系。
+- **缩略图已内置**：列表用 720 缩略图（`wp_<id>_thumb.jpg`），详情与编辑器用 1440 原图
+  （`wp_<id>.jpg`），避免列表解码原图导致内存压力。
+- **包体积 22.46 MB**（原 8.2 MB）：离线化的必然代价。如需压缩可把 media 下的 PNG 转 JPEG
+  或整体转 WebP。
 - **历史遗留文件已清理**：7 个无调用方文件与 `DEPRECATED.md` 已于 2026-09-12 删除，工程已纳入 git 版本控制。

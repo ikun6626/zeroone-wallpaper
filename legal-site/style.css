@@ -1,0 +1,156 @@
+/* ZeroOne 壁纸 · 法务文档站样式
+   配色与 App 保持一致：近黑 #0F0F12 / 强调粉 #FF6B6B / 精选金 #E6C07E */
+
+:root {
+  --bg: #0f0f12;
+  --card: #17171c;
+  --card-2: #1c1d22;
+  --line: #2a2b33;
+  --fg: #f2f2f5;
+  --fg-dim: #b9b9c4;
+  --fg-mute: #7a7a85;
+  --pink: #ff6b6b;
+  --gold: #e6c07e;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  padding: 0 16px 64px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC",
+               "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.wrap { max-width: 760px; margin: 0 auto; }
+
+header {
+  padding: 32px 0 20px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 24px;
+}
+
+header h1 {
+  margin: 0 0 6px;
+  font-size: 24px;
+  letter-spacing: .5px;
+}
+
+header .sub { color: var(--fg-mute); font-size: 13px; }
+
+nav {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 16px 0 0;
+}
+
+nav a {
+  display: inline-block;
+  padding: 7px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  text-decoration: none;
+  color: var(--fg-dim);
+  background: var(--card-2);
+  border: 1px solid transparent;
+}
+
+nav a:hover { color: var(--fg); }
+
+nav a.on {
+  color: #1a1410;
+  background: var(--gold);
+  font-weight: 600;
+}
+
+h2 {
+  font-size: 17px;
+  margin: 32px 0 10px;
+  padding-left: 10px;
+  border-left: 3px solid var(--pink);
+}
+
+p { margin: 10px 0; color: var(--fg-dim); }
+
+ul { margin: 10px 0; padding-left: 22px; color: var(--fg-dim); }
+li { margin: 5px 0; }
+
+strong { color: var(--fg); }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin: 16px 0;
+}
+
+.card.hl { border-color: #3a3038; background: #1a1519; }
+
+.card h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: var(--gold);
+}
+
+.kv { margin: 6px 0; color: var(--fg-dim); font-size: 14px; }
+.kv b { color: var(--fg); font-weight: 600; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 14px;
+}
+
+th, td {
+  text-align: left;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-dim);
+  vertical-align: top;
+}
+
+th { color: var(--fg-mute); font-weight: 500; font-size: 13px; }
+
+code {
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 13px;
+  color: var(--gold);
+  word-break: break-all;
+}
+
+a.link { color: var(--pink); text-decoration: none; }
+a.link:hover { text-decoration: underline; }
+
+footer {
+  margin-top: 44px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  color: var(--fg-mute);
+  font-size: 12.5px;
+}
+
+.todo {
+  background: #2a1f1f;
+  border: 1px dashed #6b4444;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 14px 0;
+  color: #ffb3b3;
+  font-size: 13.5px;
+}
+
+@media (prefers-color-scheme: light) {
+  /* 保持深色：与 App 一致，审核截图更统一 */
+}

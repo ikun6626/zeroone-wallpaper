@@ -26,6 +26,10 @@ export interface CropView {
   offsetY: number;
   /** 旋转角度（度，顺时针为正） */
   angle: number;
+  /** 水平镜像（绕图片中心） */
+  flipH: boolean;
+  /** 垂直镜像 */
+  flipV: boolean;
 }
 
 /** 裁剪输出尺寸（源图像素） */
@@ -46,6 +50,10 @@ export interface CropDrawTransform {
   scale: number;
   /** 旋转弧度（顺时针为正，与 Canvas rotate 一致） */
   radians: number;
+  /** 水平镜像系数（1 正常，-1 镜像） */
+  sx: number;
+  /** 垂直镜像系数 */
+  sy: number;
 }
 
 /** 裁剪比例文案转宽/高数值，自由裁剪返回 0 */
@@ -196,6 +204,31 @@ function cropPixelRatio(view: CropView): number {
 }
 
 /**
+ * 图片旋转后覆盖目标区域所需的最小总缩放
+ *
+ * 用途：裁剪态下点 90° 旋转按钮 / 拉直滑条，框不动、图转。
+ * 旋转后图片的轴对齐包围盒可能盖不住预览区（竖图转 90 后必然露黑），
+ * 据此自动放大（与 iOS 照片一致）：
+ *   AABB 宽 = disp.w·|cosθ| + disp.h·|sinθ|
+ *   AABB 高 = disp.w·|sinθ| + disp.h·|cosθ|
+ *   k = max(needW/AABB.w, needH/AABB.h)
+ *
+ * @param needW 需要覆盖的宽（vp，通常是预览宽）
+ * @param needH 需要覆盖的高（vp）
+ * @returns 建议的总 cropScale（≥1；调用方与当前缩放取 max）
+ */
+export function autoCropScale(view: CropView, needW: number, needH: number): number {
+  const rad: number = view.angle * Math.PI / 180;
+  const ac: number = Math.abs(Math.cos(rad));
+  const as: number = Math.abs(Math.sin(rad));
+  const aabbW: number = view.disp.w * ac + view.disp.h * as;
+  const aabbH: number = view.disp.w * as + view.disp.h * ac;
+  const k: number = Math.max(needW / (aabbW > 0 ? aabbW : 1),
+    needH / (aabbH > 0 ? aabbH : 1));
+  return Math.max(1, k);
+}
+
+/**
  * 裁剪输出尺寸：选区在源图像素下的实际尺寸
  *
  * 这张图与"选区看起来多大"无关，只由源图密度决定 —— 用户放大到 2 倍再裁一小块，
@@ -234,7 +267,9 @@ export function cropDrawTransform(rect: CropRect, view: CropView): CropDrawTrans
     tx: ax - rect.x,
     ty: ay - rect.y,
     scale: cropPixelRatio(view),
-    radians: radians
+    radians: radians,
+    sx: view.flipH ? -1 : 1,
+    sy: view.flipV ? -1 : 1
   };
 }
 
@@ -260,7 +295,9 @@ export function cropComposeTransform(rect: CropRect, view: CropView, cap: number
     tx: t.tx * k,
     ty: t.ty * k,
     scale: cap,
-    radians: t.radians
+    radians: t.radians,
+    sx: t.sx,
+    sy: t.sy
   };
 }
 
@@ -270,14 +307,19 @@ export function cropComposeTransform(rect: CropRect, view: CropView, cap: number
  * 用途：裁剪后把文字/贴纸的锚点从旧图像素换算到新图像素。
  * 此前用 `mapCrop` 简单减偏移，只有在"没缩放、没旋转"时才碰巧正确。
  */
-export function unprojectCrop(x: number, y: number, t: CropDrawTransform): LayerPoint {
+export function unprojectCrop(x: number, y: number, t: CropDrawTransform,
+  baseW: number, baseH: number): LayerPoint {
   const dx: number = x - t.tx;
   const dy: number = y - t.ty;
   const cos: number = Math.cos(-t.radians);
   const sin: number = Math.sin(-t.radians);
   const m: number = t.scale > 0 ? t.scale : 1;
+  // 先逆旋转/缩放 → 图片绘制坐标
+  const X: number = (dx * cos - dy * sin) / m;
+  const Y: number = (dx * sin + dy * cos) / m;
+  // 再逆镜像（镜像自逆，绕图片中心）
   return {
-    x: (dx * cos - dy * sin) / m,
-    y: (dx * sin + dy * cos) / m
+    x: t.sx < 0 ? baseW - X : X,
+    y: t.sy < 0 ? baseH - Y : Y
   };
 }

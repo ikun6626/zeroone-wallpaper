@@ -45,6 +45,12 @@ export class CanvasState {
   cropOffsetX: number = 0;
   cropOffsetY: number = 0;
   cropAngle: number = 0;
+  /** 裁剪态镜像（框不动、图镜像） */
+  cropFlipH: boolean = false;
+  cropFlipV: boolean = false;
+  /** 水平/垂直透视校正强度（-100~100；0=无；确认裁剪时烘焙） */
+  perspectiveH: number = 0;
+  perspectiveV: number = 0;
 
   /** 选区矩形（CropRect 视图，供几何函数使用） */
   cropRect(): CropRect {
@@ -65,7 +71,9 @@ export class CanvasState {
       scale: this.cropScale,
       offsetX: this.cropOffsetX,
       offsetY: this.cropOffsetY,
-      angle: this.cropAngle
+      angle: this.cropAngle,
+      flipH: this.cropFlipH,
+      flipV: this.cropFlipV
     };
   }
 
@@ -88,6 +96,10 @@ export class CanvasState {
     this.cropOffsetX = 0;
     this.cropOffsetY = 0;
     this.cropAngle = 0;
+    this.cropFlipH = false;
+    this.cropFlipV = false;
+    this.perspectiveH = 0;
+    this.perspectiveV = 0;
   }
 
   /** 退出裁剪态并复位（提交或取消后调用） */

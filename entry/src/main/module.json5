@@ -32,9 +32,14 @@
         ]
       }
     ],
+    // 联网版：申请网络权限（登录鉴权、拉取壁纸、下载图片都需要）
     "requestPermissions": [
       {
         "name": "ohos.permission.INTERNET"
+      },
+      {
+        // 触感反馈（收藏/保存/裁剪吸附），normal 级安装即授予
+        "name": "ohos.permission.VIBRATE"
       }
     ],
     "extensionAbilities": [

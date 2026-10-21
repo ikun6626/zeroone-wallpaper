@@ -316,6 +316,26 @@ export class LayerStore {
     return { texts: t, stickers: s };
   }
 
+  /**
+   * 整体恢复（撤销/重做唯一入口）：
+   * 替换图层内容（元素由调用方深拷贝），清选中态与拖动态。
+   * dirty 由调用方按"是否回到初始态"再覆盖。
+   */
+  restoreSnapshot(texts: TextItem[], stickers: StickerItem[]): void {
+    this.textList = [];
+    for (let i = 0; i < texts.length; i++) {
+      this.textList.push(texts[i]);
+    }
+    this.stickerList = [];
+    for (let i = 0; i < stickers.length; i++) {
+      this.stickerList.push(stickers[i]);
+    }
+    this.textSel = -1;
+    this.stickerSel = -1;
+    this.resetDrag();
+    this.dirtyFlag = true;
+  }
+
   // ==================== 内部 ====================
 
   private textAt(index: number): TextItem | undefined {

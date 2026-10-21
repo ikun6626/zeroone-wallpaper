@@ -1,7 +1,8 @@
 # ZeroOne 壁纸应用 · 项目架构
 
 > 适用读者：不熟悉本项目的人也能看懂模块关系。
-> 最后同步：2026-09-12（与代码实际状态一致；7 个无调用方的历史文件已于同日删除，见 `CHANGELOG.md`）。
+> 最后同步：2026-09-13（**已从 AGC 云端版改造为全离线版**：壁纸随包内置、不申请任何权限；
+> 云数据库/云存储相关代码与配置已全部移除，云端存档见 `AGC-云数据库接入步骤.md`）。
 
 ## 一、整体结构
 
@@ -34,9 +35,9 @@ flowchart TB
         end
 
         subgraph DATA["数据层"]
-            store["WallpaperStore — 唯一数据源（AppStorage 状态键 + 本地缓存 + 分页 + retry）"]
+            store["WallpaperStore — 唯一数据源（AppStorage 状态键 + 全量目录发布 + retry）"]
             prefs["PreferenceUtil — 收藏/字符串 KV（favoriteIds 广播）"]
-            clouddb["CloudDBUtil — 云数据库查询/分页/播种"]
+            catalog["LocalWallpapers — 295 条壁纸目录 + 本地原图/缩略图映射"]
         end
 
         subgraph MECH["横切机制"]
@@ -51,10 +52,6 @@ flowchart TB
             geom["CropGeometry / LayerGeometry — 纯几何换算"]
         end
 
-    end
-
-    subgraph AGC["华为 AGC"]
-        cdb["云数据库 zone=zeroone / 对象类型 wallpapers"]
     end
 
     ability --> idx
@@ -73,9 +70,8 @@ flowchart TB
     home --> store
     cat --> store
     mine --> store
-    store --> clouddb
+    store --> catalog
     store --> prefs
-    clouddb --> cdb
     editor --> composer
     editor --> filtertask
     editor --> geom
@@ -92,9 +88,8 @@ flowchart TB
 
     class idx,home,cat,sticker,mine page
     class prev,editor,studio,board,guide,legal overlay
-    class store,prefs,clouddb data
+    class store,prefs,catalog data
     class pixel,guard,appinfo,composer,filtertask,geom mech
-    class cdb cloud
 ```
 
 ## 二、横切机制（改代码前必读）
@@ -115,21 +110,18 @@ flowchart TB
 
 ## 三、关键数据流
 
-**冷启动首屏（缓存优先）**
+**冷启动首屏（同步就绪，无 IO）**
 ```
 Index.aboutToAppear → PreferenceUtil.init(ctx)   // 顺便广播 favoriteIds
                     → WallpaperStore.start()
-                        ├─ 同步读本地缓存 → AppStorage('wallpaperList')  // 首帧就有内容，不黑屏
-                        └─ 后台 refresh() → CloudDBUtil.queryWallpaperPage(10, 0)
-                              ├─ 空表 → batchInsert(默认壁纸) 后按本地分页
-                              └─ 失败 → 标记 offline + error，保留已有内容（无内容才用内置兜底）
+                        └─ 直接切本地目录第一页 → AppStorage('wallpaperList')
+                             （离线版没有缓存读取、没有网络请求，首帧即有内容）
 ```
 
-**分页与失败恢复**
+**列表渲染（LazyForEach）**
 ```
 HomePage.onReachEnd → store.loadMore()
-   成功 → 按 id 去重追加，满页才继续有下一页
-   失败 → 只置 'wallpaperError'（**绝不把 More 置 false**）→ 列表底部出现"加载失败，点击重试"
+   本地数组切片 → 按 id 去重追加；游标到底才把 More 置 false
 ```
 
 **收藏（跨 Tab 一致）**
@@ -153,8 +145,8 @@ ImageEditor.exportAndSave → ImageComposer.composeToJpeg(base, texts, stickers,
 | **AppScope** | 应用身份证：名称、包名 `com.zeroone.wallpaper`、版本 1.0.0 | 已实现 |
 | **EntryAbility** | 应用大门，负责启动并打开 Index | 已实现 |
 | **Index** | 4 个底部 Tab 的容器，并负责返回键分发与数据源启动 | 已实现 |
-| **HomePage** | Cuto 式大图卡片流：骨架屏/错误重试/离线提示/上拉分页/今日精选徽标 | 已实现 |
-| **CategoryPage** | 合辑墙（猫咪/狗狗/动物萌宠/4 个分类）+ 等比网格详情 | 已实现 |
+| **HomePage** | Cuto 式大图卡片流（LazyForEach 懒加载）/今日精选徽标 | 已实现 |
+| **CategoryPage** | 合辑墙（猫咪/狗狗/动物萌宠/风景精选/自然风光/城市建筑…）+ 等比网格详情（LazyForEach） | 已实现 |
 | **StickerPage** | 贴纸枢纽，进入工作台与画板 | 已实现 |
 | **StickerStudioPage** | 选背景 → 贴纸自由摆放/缩放/旋转 → 存 JPG/透明 PNG/锁屏图/桌面图 | 已实现 |
 | **StickerBoardPage** | 多贴纸画板：自定义背景 + 多贴纸 + 保存 | 已实现 |
@@ -162,8 +154,9 @@ ImageEditor.exportAndSave → ImageComposer.composeToJpeg(base, texts, stickers,
 | **ImagePreview** | 全屏预览：Cover 铺满屏幕（= 壁纸效果）、缩放/双击/滑动关闭、锁屏桌面模拟、保存（铺满屏幕 / 原图比例两种比例）、设为锁屏/桌面、进编辑器 | 已实现 |
 | **ImageEditor** | 旋转/翻转/裁剪（8 把手 + 6 比例）/20 滤镜/5 纹理/艺术字/贴纸（可旋转）/导出 | 已实现 |
 | **LegalDocPage** | 隐私政策、用户协议、关于与版权、清除缓存 | 已实现 |
-| **WallpaperStore** | 唯一数据源：缓存优先、分页、并发去重、失败可重试 | 已实现 |
-| **CloudDBUtil** | 云数据库查询/分页/按分类查询/播种 | 已实现 |
+| **WallpaperStore** | 唯一数据源：一次性发布全量目录（本地数据不需要分页） | 已实现 |
+| **LocalWallpapers** | 295 条壁纸目录 + 本地原图/缩略图资源映射 | 已实现 |
+| **WallpaperDataSource** | LazyForEach 的 IDataSource 实现（只建可见区域组件） | 新增 |
 | **PreferenceUtil** | 收藏持久化 + favoriteIds 广播 + 通用字符串 KV | 已实现 |
 | **common/editor** | 编辑器内核：滤镜线程池、几何换算、离屏合成 | 已实现 |
 | **common/canvas** | 画布规格（设备像素）+ 底图变换 + 归一化图层坐标，纯函数并带单元测试 | 新增 |
@@ -171,6 +164,6 @@ ImageEditor.exportAndSave → ImageComposer.composeToJpeg(base, texts, stickers,
 ## 五、一句话看懂
 
 > 点开 App → **EntryAbility** 打开 **Index**（4 个 Tab）→ 页面不自带数据，统一向 **WallpaperStore** 订阅；
-> 数据"先本地缓存秒开、再云端刷新"，云端来自 **AGC 云数据库**；
+> 数据来自随包内置的 **LocalWallpapers**（295 条，无网络请求），由 **WallpaperStore** 一次性发布；
 > 看中一张图 → **ImagePreview** → 保存或"设为锁屏/桌面"（保存后引导去图库完成最后一步），或进 **ImageEditor** 编辑导出；
 > 所有覆盖层共用 **EditGuard** 管返回键、**PixelScope** 管位图内存，导出侧与预览侧由 **ImageComposer** 保证"所见即所得"。

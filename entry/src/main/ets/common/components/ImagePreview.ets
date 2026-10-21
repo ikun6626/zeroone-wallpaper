@@ -1,12 +1,16 @@
 import { Wallpaper } from '../../model/Wallpaper';
-import { promptAction } from '@kit.ArkUI';
+import { promptAction, display } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { image } from '@kit.ImageKit';
-import request from '@ohos.request';
 import { fileIo } from '@kit.CoreFileKit';
 import { ImageEditor } from './ImageEditor';
 import { PreferenceUtil } from '../utils/PreferenceUtil';
+import { WallpaperApi } from '../net/WallpaperApi';
+import { ImageCache } from '../net/ImageCache';
+import { Haptics } from '../utils/Haptics';
+import { RemoteImage } from './RemoteImage';
+import { LocalWallpapers } from '../constants/LocalWallpapers';
 import { SetWallpaperGuidePanel, WallpaperKind } from './SetWallpaperGuide';
 import { EditGuard } from '../utils/EditGuard';
 import { CanvasSpec } from '../canvas/CanvasSpec';
@@ -19,8 +23,55 @@ import { composeCoverToJpeg } from '../editor/ImageComposer';
 const MAX_SCALE: number = 4;
 /** 双击放大后的倍数 */
 const DOUBLE_SCALE: number = 2.5;
-/** 下滑/左滑多少距离触发关闭 */
+/** 下滑多少距离触发关闭 */
 const DISMISS_THRESHOLD: number = 120;
+/** 左右滑多少距离（vp）触发切换上/下一张 */
+const SWITCH_THRESHOLD: number = 70;
+/** 切图过渡时长（ms）：旧图退出 / 新图进入各一段 */
+const SWITCH_ANIM_MS: number = 140;
+/**
+ * 铺满(cover)允许裁掉的最大图片比例：超过则默认改用「适应」完整显示。
+ * 0.15 表示最多裁掉整张图的 15%（约每边 7.5%）仍算「铺满可接受」。
+ * 想要更激进的完整显示就调小，想更贴近壁纸效果就调大。
+ */
+const COVER_CROP_TOLERANCE: number = 0.15;
+
+/**
+ * 按文件头魔数判断图片真实格式，返回相册资产所需的扩展名。
+ *
+ * 为什么不用原文件名后缀：预览页的临时文件统一叫 `.jpg`（云端下载 / 本地随包都写这个路径），
+ * 但云端原图可能被转码成 webp / png —— 直接按 `.jpg` 建资产会让相册解不出图。
+ * 只服务"适应 = 存原图"的透传路径；铺满路径恒为 JPEG 编码结果，不需要本函数。
+ */
+function detectImageExt(path: string): string {
+  let ext: string = 'jpg';
+  const buf: ArrayBuffer = new ArrayBuffer(12);
+  try {
+    const file = fileIo.openSync(path, fileIo.OpenMode.READ_ONLY);
+    try {
+      const read: number = fileIo.readSync(file.fd, buf);
+      if (read >= 12) {
+        const b: Uint8Array = new Uint8Array(buf);
+        if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) {
+          ext = 'png';
+        } else if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46
+          && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) {
+          ext = 'webp';
+        } else if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) {
+          ext = 'gif';
+        } else if (b[0] === 0x42 && b[1] === 0x4D) {
+          ext = 'bmp';
+        }
+        // JPEG(FF D8) 等其余情况沿用默认 'jpg'
+      }
+    } finally {
+      fileIo.closeSync(file);
+    }
+  } catch (e) {
+    // 读文件头失败：保守沿用 'jpg'
+  }
+  return ext;
+}
 
 /**
  * ImagePreview —— 全屏大图预览（Cuto 风格）
@@ -31,16 +82,32 @@ const DISMISS_THRESHOLD: number = 120;
  *  - 保存成功后弹出图库设置引导（三方应用无法直接换壁纸，见 SetWallpaperGuide）
  *  - 单击图片：工具栏/返回箭头在显示 ↔ 隐藏之间切换（沉浸式看图）
  *  - 双指捏合缩放；双击放大/还原；放大后单指拖动浏览
- *  - 未放大时左滑或下滑 → 带动画关闭
- *  - 保存比例固定"铺满屏幕"（按设备屏幕像素合成 = 壁纸效果）；
- *    比例胶囊已按产品要求收起 —— "设为锁屏/桌面"本来就只应该给铺满的图
+ *  - 未放大时**左右滑切换上一张 / 下一张**（与首页 Hero 轮播一致）；下滑带动画关闭
+ *  - 保存结果**跟随当前显示方式**（所见即所得）：
+ *      铺满 → 按设备屏幕像素离屏合成（cover + 当前缩放/平移 = 用户所见），
+ *             存出来就是手机比例，设为锁屏/桌面不会被系统二次裁切；
+ *      适应 → **直接存原图**（不裁切、不缩放、不重编码），保留原始构图与比例
  *  - 预览模式：普通 → iOS 桌面 → iOS 锁屏（模拟壁纸实际效果）
  */
 @Component
 export struct ImagePreview {
-  @Prop wallpaper: Wallpaper = new Wallpaper();
-  localImg: Resource | undefined = undefined;
+  /** 初始展示的壁纸（左右滑切换后由内部状态 cur 接管） */
+  @Prop @Watch('onWallpaperPropChange') wallpaper: Wallpaper = new Wallpaper();
+  /**
+   * 取相邻壁纸：current = 当前展示项，dir = -1 上一张 / +1 下一张；
+   * 返回 undefined 表示已到列表尽头。
+   * 由调用页提供 —— 各页的列表不同（首页 Hero+分区、合辑详情、我的收藏）。
+   */
+  neighbor: (current: Wallpaper, dir: number) => Wallpaper | undefined =
+    (_current: Wallpaper, _dir: number): Wallpaper | undefined => undefined;
   onClose: () => void = () => {};
+
+  /** 当前正在展示的壁纸（初始 = wallpaper 入参） */
+  @State cur: Wallpaper = new Wallpaper();
+  /** 左右滑切图的水平位移（vp）：拖动跟手 + 切图进出动画 */
+  @State switchDx: number = 0;
+  /** 本次拖动主轴是否为水平（决定松手后是切图还是关闭/复位） */
+  private lastAxisHorizontal: boolean = false;
 
   /** 缩放 / 平移 / 关闭动画 */
   @State zoomScale: number = 1;
@@ -49,8 +116,6 @@ export struct ImagePreview {
   @State dismissX: number = 0;
   @State dismissY: number = 0;
   @State dismissOpacity: number = 1;
-  @State remoteLoaded: boolean = false;
-  @State remoteFailed: boolean = false;
   @State saving: boolean = false;
   @State showEditor: boolean = false;
   /** 预览区尺寸（vp）：由 onAreaChange 记录，用于夹紧平移与归一化换算 */
@@ -60,6 +125,18 @@ export struct ImagePreview {
   @State uiVisible: boolean = true;
   /** 预览模式：normal / home / lock */
   @State previewMode: string = 'normal';
+  /**
+   * 图片显示方式：true = Cover 铺满（= 设为壁纸后的真实效果）
+   *                false = Contain 适应（完整显示整张图，上下留黑边）
+   *
+   * 默认策略（自适应屏幕比例）：铺满必然裁掉一部分图，裁多少取决于
+   * 「图片比例 vs 当前机型屏幕比例」的差距 —— 差距小（如 9:16 图放到细长屏）
+   * 就铺满，差距大（如 2:3 / 4:3 图放到 9:20 屏会被裁掉 20%+）就改「适应」完整显示。
+   * 同一张图在 16:9 / 19.5:9 / 折叠屏上会得到不同结论。见 decideFitCover()。
+   */
+  @State fitCover: boolean = true;
+  /** 用户是否手动点过「铺满/适应」：点过之后 onInfo 不再自动覆盖其选择 */
+  private userTouchedFit: boolean = false;
   /** 收藏状态（简易本地存储） */
   @State isFav: boolean = false;
   /** 时钟刷新计数：每分钟 +1，驱动锁屏/桌面模拟层时间重绘 */
@@ -79,13 +156,17 @@ export struct ImagePreview {
   private baseOffsetY: number = 0;
 
   aboutToAppear(): void {
+    // 内部展示项以入参初始化（之后左右滑切换只改 cur，不动父页面的 previewItem）
+    this.cur = this.wallpaper;
+    // P1：每次重新进入预览都回到「普通」模式，避免上次的锁屏/桌面模拟残留
+    this.previewMode = 'normal';
     // 进入预览时读取本地收藏状态，保证与首页/合辑/我的页面一致
-    this.isFav = PreferenceUtil.isFavorite(this.wallpaper.id);
+    this.isFav = PreferenceUtil.isFavorite(this.cur.id);
     this.startClockTicker();
     // 注册返回键处理：预览是覆盖层，返回键应关闭预览。
     // 此前没有这个拦截，用户按返回键会直接把 App 退出（真实且高频的体验事故）。
     this.backId = EditGuard.push((): boolean => {
-      this.dismiss(true);
+      this.dismiss();
       return true;
     });
   }
@@ -121,6 +202,136 @@ export struct ImagePreview {
     return Math.min(MAX_SCALE, Math.max(1, value));
   }
 
+  /**
+   * 当前预览区（≈屏幕可视区）的宽高比。优先用 onAreaChange 记录的实际尺寸；
+   * 若图片解码早于首次布局返回，则退回系统显示的屏幕比例兜底。
+   */
+  private containerRatio(): number {
+    if (this.frameW > 0 && this.frameH > 0) {
+      return this.frameW / this.frameH;
+    }
+    try {
+      const d: display.Display = display.getDefaultDisplaySync();
+      if (d.height > 0) {
+        return d.width / d.height;
+      }
+    } catch (e) {
+      return 0;
+    }
+    return 0;
+  }
+
+  /**
+   * 按「图片比例 vs 当前屏幕比例」自适应决定 铺满(cover) / 适应(contain)。
+   *
+   * 铺满必然裁掉一部分图，裁切比例 = 1 - min(屏比, 图比) / max(屏比, 图比)：
+   *   - 图片比例越接近屏幕 → 裁得越少 → 铺满越自然（如 9:16 图放 16:9 屏）；
+   *   - 差距越大 → 裁得越多 → 改「适应」完整显示（如 2:3 图放 9:20 细长屏）。
+   * 阈值 COVER_CROP_TOLERANCE 控制「最多容忍裁掉多少」。
+   */
+  private decideFitCover(w: number, h: number): boolean {
+    if (w <= 0 || h <= 0) {
+      return this.fitCover;
+    }
+    const scr: number = this.containerRatio();
+    if (scr <= 0) {
+      return this.fitCover;
+    }
+    const img: number = w / h;
+    const crop: number = 1 - Math.min(scr, img) / Math.max(scr, img);
+    return crop <= COVER_CROP_TOLERANCE;
+  }
+
+  /** 父页面换了一张壁纸（如从收藏列表再点一张）→ 内部展示项同步 */
+  onWallpaperPropChange(): void {
+    if (this.wallpaper.id === this.cur.id) {
+      return;
+    }
+    this.cur = this.wallpaper;
+    this.isFav = PreferenceUtil.isFavorite(this.cur.id);
+    this.resetView();
+  }
+
+  /** 远程图地址：优先原图，没有原图用缩略图（本地壁纸返回空串） */
+  private remoteSrc(): string {
+    if (this.cur.imageUrl.length > 0) {
+      return this.cur.imageUrl;
+    }
+    return this.cur.thumbUrl;
+  }
+
+  /** 当前图的随包兜底资源（原图尺寸，预览/编辑/保存都用它） */
+  private curLocalImg(): Resource | undefined {
+    return LocalWallpapers.getLocalImg(this.cur.id);
+  }
+
+  /** 复位缩放/平移/滑动位移（切图后必须复位，否则沿用上一张的偏移会"跳一下"） */
+  private resetView(): void {
+    this.zoomScale = 1;
+    this.offsetX = 0;
+    this.offsetY = 0;
+    this.switchDx = 0;
+    this.dismissX = 0;
+    this.dismissY = 0;
+    this.dismissOpacity = 1;
+    this.baseScale = 1;
+    this.baseOffsetX = 0;
+    this.baseOffsetY = 0;
+  }
+
+  /**
+   * 切到相邻一张：旧图沿滑动方向滑出 → 换图 → 新图从反方向滑入。
+   * 到头时弹提示并把位移复位。
+   * @param dir -1 上一张（右滑）/ +1 下一张（左滑）
+   */
+  private goNeighbor(dir: number): void {
+    const next: Wallpaper | undefined = this.neighbor(this.cur, dir);
+    const w: number = this.frameW > 0 ? this.frameW : 360;
+    if (next === undefined) {
+      promptAction.showToast({ message: dir > 0 ? '已经是最后一张' : '已经是第一张' });
+      animateTo({ duration: SWITCH_ANIM_MS, curve: Curve.EaseOut }, () => {
+        this.switchDx = 0;
+      });
+      return;
+    }
+    Haptics.light();
+    // 旧图滑出
+    animateTo({ duration: SWITCH_ANIM_MS, curve: Curve.EaseIn }, () => {
+      this.switchDx = dir > 0 ? -w : w;
+      this.dismissOpacity = 0;
+    });
+    setTimeout(() => {
+      this.cur = next;
+      this.isFav = PreferenceUtil.isFavorite(next.id);
+      this.resetView();
+      // 新图先摆到另一侧再滑入
+      this.switchDx = dir > 0 ? w : -w;
+      this.dismissOpacity = 0;
+      animateTo({ duration: SWITCH_ANIM_MS, curve: Curve.EaseOut }, () => {
+        this.switchDx = 0;
+        this.dismissOpacity = 1;
+      });
+    }, SWITCH_ANIM_MS);
+  }
+
+  /**
+   * 下载远程图到沙箱临时文件（云端壁纸的保存链路）。
+   * 走 ImageCache：浏览/预览过的图直接命中磁盘缓存，零流量秒存。
+   * 下载/写盘失败抛错（由调用方统一提示）。
+   */
+  private async downloadRemote(dest: string): Promise<void> {
+    const buf: ArrayBuffer = await ImageCache.fetchBytes(this.remoteSrc());
+    if (buf.byteLength <= 0) {
+      throw new Error('empty body');
+    }
+    const file = fileIo.openSync(dest, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
+    try {
+      fileIo.writeSync(file.fd, buf);
+    } finally {
+      fileIo.closeSync(file);
+    }
+  }
+
   /** 把当前缩放/平移夹回合法范围（放大后拖动、缩小时都要过这一道，避免露出黑边） */
   private clampPan(): void {
     const mx: number = ViewMath.maxPan(this.zoomScale, this.frameW);
@@ -137,7 +348,8 @@ export struct ImagePreview {
   }
 
   /**
-   * 按画布（= 手机屏幕像素）合成 JPEG —— "铺满屏幕"保存
+   * 按画布（= 手机屏幕像素）合成 JPEG —— **仅用于「铺满」模式**的保存
+   * （「适应」模式不走这里，直接拷原图，见 saveToAlbum）
    * @param srcPath 沙箱内的原图文件路径
    */
   private async composeCanvasRatio(srcPath: string): Promise<ArrayBuffer> {
@@ -161,14 +373,21 @@ export struct ImagePreview {
     }
   }
 
-  /** 当前时间 H:mm（锁屏大号用） */
+  /** 当前时间 h:mm（12 小时制，锁屏/桌面大号用） */
   private currentTimeShort(): string {
     // 读取 nowTick 建立渲染依赖：分钟变化时定时器驱动重绘
     if (this.nowTick < 0) { return ''; }
     const d = new Date();
-    const h = d.getHours();
+    const h24: number = d.getHours();
+    const h: number = h24 % 12 === 0 ? 12 : h24 % 12;
     const m = d.getMinutes().toString().padStart(2, '0');
     return `${h}:${m}`;
+  }
+
+  /** 上午 / 下午（动态计算，不再写死「下午」） */
+  private currentPeriod(): string {
+    if (this.nowTick < 0) { return ''; }
+    return new Date().getHours() < 12 ? '上午' : '下午';
   }
 
   /** 当前日期：周M月D日 */
@@ -225,7 +444,8 @@ export struct ImagePreview {
       .iconSize(22)
       .onClick((_: ClickEvent, result: SaveButtonOnClickResult) => {
         if (result === SaveButtonOnClickResult.SUCCESS && !this.saving) {
-          // 固定存"铺满屏幕"（= 壁纸成品）；锁屏/桌面在保存后的步骤卡片里选
+          // 保存结果跟随当前显示方式（所见即所得）：铺满 → 按屏幕合成壁纸成品；适应 → 存原图。
+          // 锁屏/桌面在保存后的步骤卡片里选（仅铺满模式弹该卡片，见 saveToAlbum）。
           this.saveToAlbum(WallpaperKind.LOCK);
         }
       })
@@ -243,72 +463,85 @@ export struct ImagePreview {
     });
   }
 
-  /**
-   * 关闭预览：按实际触发方向飞出
-   * @param vertical true=下滑手势，图片向下飞出；false=左滑手势，图片向左飞出
-   */
-  private dismiss(vertical: boolean): void {
+  /** 关闭预览：图片向下飞出 + 淡出 */
+  private dismiss(): void {
     animateTo({ duration: 180, curve: Curve.EaseIn }, () => {
-      if (vertical) {
-        this.dismissX = 0;
-        this.dismissY = 600;
-      } else {
-        this.dismissX = -500;
-        this.dismissY = 0;
-      }
+      this.dismissX = 0;
+      this.dismissY = 600;
       this.dismissOpacity = 0;
     });
     setTimeout(() => { this.onClose(); }, 180);
   }
 
   /**
-   * 保存到系统相册（固定按"铺满屏幕"合成 = 壁纸成品），随后展示设置引导卡片
-   * @param guideKind 引导卡片默认展开的目标：WallpaperKind.LOCK / HOME（卡片里可切换）
+   * 保存到系统相册 —— 保存结果**跟随当前显示方式**（所见即所得）：
+   *   铺满 → 按设备屏幕像素合成 cover 成品（= 设为壁纸的真实效果），并展示设置引导卡片；
+   *   适应 → **直接存原图**（不裁切 / 不缩放 / 不重编码），不弹壁纸引导
+   *          （原图不是"可直接设为壁纸的成品"，系统仍会自行裁切，弹引导语义不通）
+   * @param guideKind 引导卡片默认展开的目标：WallpaperKind.LOCK / HOME（仅铺满模式使用）
    */
   async saveToAlbum(guideKind: number): Promise<void> {
     if (this.saving) return;
-    if (this.wallpaper.imageUrl.length === 0 && this.localImg === undefined) {
-      promptAction.showToast({ message: '图片地址无效' });
+    // 保存无需登录（用户体系暂未开放）：本地壁纸直接读随包资源，云端壁纸先下载
+    const localRes: Resource | undefined = this.curLocalImg();
+    if (localRes === undefined && this.remoteSrc().length === 0) {
+      promptAction.showToast({ message: '图片资源缺失' });
       return;
     }
+    const keepOriginal: boolean = !this.fitCover;
     this.saving = true;
     const ctx: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
     const dest: string = `${ctx.filesDir}/zeroone_preview_${Date.now()}.jpg`;
     let tempCreated: boolean = false;
+    let isCloud: boolean = false;
     try {
-      if (this.wallpaper.imageUrl.length > 0) {
-        const task: request.DownloadTask = await request.downloadFile(ctx, {
-          'url': this.wallpaper.imageUrl, 'filePath': dest
-        });
-        await new Promise<void>((resolve, reject) => {
-          task.on('complete', () => resolve());
-          task.on('fail', () => reject(new Error('download fail')));
-        });
-      } else if (this.localImg !== undefined) {
-        const content: Uint8Array = await ctx.resourceManager.getMediaContent(this.localImg);
-        const file = fileIo.openSync(dest, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
-        fileIo.writeSync(file.fd, content.buffer as ArrayBuffer);
-        fileIo.closeSync(file);
+      if (this.cur.isCloud) {
+        // 云端壁纸（即使有随包兜底图）：下载云端高清原图
+        await this.downloadRemote(dest);
+        tempCreated = true;
+        isCloud = true;
+      } else if (localRes !== undefined) {
+        // 纯本地壁纸：源图来自随包内置资源
+        const content: Uint8Array = await ctx.resourceManager.getMediaContent(localRes);
+        const srcFile = fileIo.openSync(dest, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
+        fileIo.writeSync(srcFile.fd, content.buffer as ArrayBuffer);
+        fileIo.closeSync(srcFile);
+        tempCreated = true;
       }
-      tempCreated = true;
 
-      // 保存比例固定"铺满屏幕"：按设备屏幕像素离屏合成（cover + 当前缩放/平移 = 用户所见），
-      // 存出来的图就是手机比例，设为壁纸/桌面不会被系统二次裁切。
-      // （"原图比例"出口已按产品要求收起；以后要保留的话，放在编辑页的导出更合适 ——
-      //   预览页的点按都要走 SaveButton 的临时授权，多一步选择容易超出授权时限。）
-      const bytes: ArrayBuffer = await this.composeCanvasRatio(dest);
-      const out = fileIo.openSync(dest, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
-      fileIo.writeSync(out.fd, bytes);
-      fileIo.closeSync(out);
+      if (!keepOriginal) {
+        // 铺满：按设备屏幕像素离屏合成（cover + 当前缩放/平移 = 用户所见），
+        // 存出来的图就是手机比例，设为壁纸/桌面不会被系统二次裁切。
+        const bytes: ArrayBuffer = await this.composeCanvasRatio(dest);
+        const out = fileIo.openSync(dest, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+        fileIo.writeSync(out.fd, bytes);
+        fileIo.closeSync(out);
+      }
+      // 适应：不做任何合成 —— dest 中的源图字节原样写入相册（无损，且更快更省内存）。
+      // 用户若在适应模式下双指放大过，仅属浏览行为，不改变成图（按产品要求"适应=原图"）。
 
       const phHelper: photoAccessHelper.PhotoAccessHelper = photoAccessHelper.getPhotoAccessHelper(ctx);
-      const uri: string = await phHelper.createAsset(photoAccessHelper.PhotoType.IMAGE, 'jpg');
+      // 原图透传时真实格式可能是 png / webp（云端转码），按魔数取后缀，
+      // 否则写进 .jpg 资产会让相册解不出图；铺满模式恒为 JPEG 编码结果。
+      const assetExt: string = keepOriginal ? detectImageExt(dest) : 'jpg';
+      const uri: string = await phHelper.createAsset(photoAccessHelper.PhotoType.IMAGE, assetExt);
       const file = fileIo.openSync(uri, fileIo.OpenMode.WRITE_ONLY);
       fileIo.copyFileSync(dest, file.fd);
       fileIo.closeSync(file);
-      // 保存成功后展示引导卡片（在 SaveButton 回调之外渲染）：
-      // 卡片里可以切"锁屏 / 桌面"，所以主 CTA 只需要一个（Cuto 同款流程）。
-      this.guideKind = guideKind;
+      // 云端壁纸：上报一次下载（管理后台统计），失败不影响保存结果
+      if (isCloud) {
+        WallpaperApi.reportDownload(this.cur.cloudId);
+      }
+      // 保存成功触感
+      Haptics.success();
+      if (keepOriginal) {
+        promptAction.showToast({ message: '已保存 · 原图' });
+      } else {
+        promptAction.showToast({ message: '已保存 · 铺满' });
+        // 保存成功后展示引导卡片（在 SaveButton 回调之外渲染）：
+        // 卡片里可以切"锁屏 / 桌面"，所以主 CTA 只需要一个（Cuto 同款流程）。
+        this.guideKind = guideKind;
+      }
     } catch (e) {
       console.error(`saveToAlbum failed: ${JSON.stringify(e)}`);
       promptAction.showToast({ message: '保存失败，请重试' });
@@ -336,21 +569,26 @@ export struct ImagePreview {
       // 此前用 Contain 完整显示，横图和方图会在上下留大片黑边、比例"很怪"，
       // 而且与"设为壁纸"后的效果完全不一致 —— 现在预览即壁纸效果。
       Stack() {
-        if (this.localImg !== undefined && !this.remoteLoaded) {
-          Image(this.localImg).width('100%').height('100%').objectFit(ImageFit.Cover)
-        }
-        if (this.wallpaper.imageUrl.length > 0 && !this.remoteFailed) {
-          Image(this.wallpaper.imageUrl)
-            .width('100%').height('100%').objectFit(ImageFit.Cover)
-            .opacity(this.remoteLoaded ? 1 : 0)
-            .onComplete(() => { this.remoteLoaded = true; })
-            .onError(() => { this.remoteFailed = true; })
-        }
+        // 云端壁纸：远程原图（走三级缓存）；本地壁纸：随包内置资源。
+        RemoteImage({
+          url: this.remoteSrc(),
+          fallback: this.curLocalImg(),
+          fit: this.fitCover ? ImageFit.Cover : ImageFit.Contain,
+          fallbackFit: this.fitCover ? ImageFit.Cover : ImageFit.Contain,
+          onInfo: (w: number, h: number): void => {
+            // 按「图片比例 vs 当前屏幕比例」自适应决定铺满/适应（见 decideFitCover）；
+            // 用户已手动点过切换按钮，则不再自动覆盖其选择。
+            if (!this.userTouchedFit) {
+              this.fitCover = this.decideFitCover(w, h);
+            }
+          }
+        })
+          .geometryTransition(`wpic_${this.cur.id}`)
       }
       .width('100%')
       .height('100%')
       .scale({ x: this.zoomScale, y: this.zoomScale })
-      .translate({ x: this.offsetX + this.dismissX, y: this.offsetY + this.dismissY })
+      .translate({ x: this.offsetX + this.dismissX + this.switchDx, y: this.offsetY + this.dismissY })
       .opacity(this.dismissOpacity)
       .onAreaChange((_oldValue: Area, newValue: Area) => {
         // 记录预览区尺寸（vp）：平移夹紧与导出归一化都依赖它
@@ -379,7 +617,7 @@ export struct ImagePreview {
                 });
               }
             }),
-          // 拖动 / 下滑关闭 / 左滑关闭
+          // 拖动：放大后平移 / 未放大时左右滑切图、下滑关闭
           PanGesture()
             .onActionStart(() => {
               this.baseOffsetX = this.offsetX;
@@ -392,34 +630,49 @@ export struct ImagePreview {
                 const my: number = ViewMath.maxPan(this.zoomScale, this.frameH);
                 this.offsetX = ViewMath.clampValue(this.baseOffsetX + e.offsetX, -mx, mx);
                 this.offsetY = ViewMath.clampValue(this.baseOffsetY + e.offsetY, -my, my);
+                return;
+              }
+              // 未放大：按主轴分流 —— 水平 = 切上/下一张，垂直 = 下滑关闭（上滑不响应）
+              this.lastAxisHorizontal = Math.abs(e.offsetX) > Math.abs(e.offsetY);
+              if (this.lastAxisHorizontal) {
+                // 图片跟手左右移动；另一轴清零，避免方向切换时残留位移
+                this.dismissX = 0;
+                this.dismissY = 0;
+                this.dismissOpacity = 1;
+                this.switchDx = e.offsetX;
               } else {
-                // 判断方向：左滑优先；切换主轴时清零另一轴，避免残留位移
-                if (Math.abs(e.offsetX) > Math.abs(e.offsetY)) {
-                  this.dismissY = 0;
-                  this.dismissX = Math.min(0, e.offsetX);
-                  this.dismissOpacity = Math.max(0, 1 + this.dismissX / 400);
-                } else {
-                  this.dismissX = 0;
-                  this.dismissY = Math.max(0, e.offsetY);
-                  this.dismissOpacity = Math.max(0, 1 - this.dismissY / 400);
-                }
+                this.switchDx = 0;
+                this.dismissX = 0;
+                this.dismissY = Math.max(0, e.offsetY);
+                this.dismissOpacity = Math.max(0, 1 - this.dismissY / 400);
               }
             })
             .onActionEnd(() => {
-              if (this.zoomScale <= 1) {
-                if (this.dismissY > DISMISS_THRESHOLD) {
-                  // 下滑触发 → 向下飞出
-                  this.dismiss(true);
-                } else if (-this.dismissX > DISMISS_THRESHOLD) {
-                  // 左滑触发 → 向左飞出
-                  this.dismiss(false);
+              if (this.zoomScale > 1) {
+                return;
+              }
+              if (this.lastAxisHorizontal) {
+                if (this.switchDx <= -SWITCH_THRESHOLD) {
+                  // 左滑 → 下一张
+                  this.goNeighbor(1);
+                } else if (this.switchDx >= SWITCH_THRESHOLD) {
+                  // 右滑 → 上一张
+                  this.goNeighbor(-1);
                 } else {
                   animateTo({ duration: 150, curve: Curve.EaseOut }, () => {
-                    this.dismissX = 0;
-                    this.dismissY = 0;
-                    this.dismissOpacity = 1;
+                    this.switchDx = 0;
                   });
                 }
+                return;
+              }
+              if (this.dismissY > DISMISS_THRESHOLD) {
+                // 下滑触发 → 向下飞出关闭
+                this.dismiss();
+              } else {
+                animateTo({ duration: 150, curve: Curve.EaseOut }, () => {
+                  this.dismissY = 0;
+                  this.dismissOpacity = 1;
+                });
               }
             })
         )
@@ -437,17 +690,14 @@ export struct ImagePreview {
               .fontColor(Color.White)
               .fontFamily('HarmonyOS Sans')
               .textShadow({ radius: 6, color: '#88000000', offsetX: 0, offsetY: 1 })
-            Text('下午')
+            Text(this.currentPeriod())
               .fontSize(18).fontColor(Color.White)
               .margin({ left: 4, top: 20 })
-            Blank()
-            Column({ space: 2 }) {
-              Text('☀️  15℃').fontSize(16).fontColor(Color.White)
-              Text('🌤 17/7').fontSize(12).fontColor('#CCFFFFFF')
-            }
           }
           .width('100%')
-          .padding({ left: 18, right: 18 })
+          // 浅色壁纸上白字会看不清：给时钟区加一层半透明暗色底
+          .padding({ left: 18, right: 18, top: 10, bottom: 10 })
+          .backgroundColor('#33000000')
 
           Text(this.currentDateStr())
             .fontSize(12).fontColor('#CCFFFFFF')
@@ -533,7 +783,11 @@ export struct ImagePreview {
               .fontFamily('HarmonyOS Sans')
               .textShadow({ radius: 10, color: '#99000000', offsetX: 0, offsetY: 2 })
           }
-          .width('100%').alignItems(HorizontalAlign.Center)
+          // 浅色壁纸上白色时钟会糊：加半透明暗色底，保证任何壁纸都可读
+          .width('92%').alignItems(HorizontalAlign.Center)
+          .padding({ top: 12, bottom: 12 })
+          .backgroundColor('#26000000')
+          .borderRadius(24)
           .margin({ bottom: 200 })
 
           Blank()
@@ -565,11 +819,13 @@ export struct ImagePreview {
           Row({ space: 28 }) {
             // 收藏：实心/描边靠颜色区分（未收藏=白，已收藏=主题红）
             SymbolGlyph($r('sys.symbol.heart'))
-              .fontColor([this.isFav ? '#FF6B6B' : '#F2F2F5'])
+              .fontColor([this.isFav ? '#C9333D' : '#F2F2F5'])
               .fontSize(22)
               .onClick(() => {
-                // 写入本地收藏，返回父页面时由 onClose 回调刷新心形状态
-                this.isFav = PreferenceUtil.toggleFavorite(this.wallpaper.id);
+                Haptics.light();
+                // 写入本地收藏（带快照登记，云端图不在目录分页里也能在「最爱收藏」展示），
+                // 返回父页面时由 onClose 回调刷新心形状态
+                this.isFav = PreferenceUtil.toggleFavoriteItem(this.cur.id, this.cur);
                 promptAction.showToast({ message: this.isFav ? '已收藏 ❤️' : '已取消收藏' });
               })
 
@@ -585,6 +841,26 @@ export struct ImagePreview {
               else if (this.previewMode === 'home') this.previewMode = 'lock';
               else this.previewMode = 'normal';
             })
+
+            // 铺满 / 适应切换：默认按屏幕比例自适应，这里供用户手动覆盖
+            Text(this.fitCover ? '铺满' : '适应')
+              .fontSize(13)
+              .fontColor('#F2F2F5')
+              .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+              .backgroundColor('#33FFFFFF')
+              .borderRadius(13)
+              .onClick(() => {
+                // 用户手动切换后，后续图片回调不再自动改回
+                this.userTouchedFit = true;
+                this.fitCover = !this.fitCover;
+                // 切换时重置缩放与位移：两种模式的平移边界不同，带着旧偏移会"跳一下"
+                this.zoomScale = 1;
+                this.offsetX = 0;
+                this.offsetY = 0;
+                promptAction.showToast({
+                  message: this.fitCover ? '铺满（= 设为壁纸后的效果）' : '适应（完整显示整张图）'
+                });
+              })
 
             // 保存铺满图并给出设置步骤（锁屏/桌面在卡片里选）
             this.saveWallpaperButton()
@@ -607,8 +883,8 @@ export struct ImagePreview {
       // ===== 7. 图片编辑器覆盖层 =====
       if (this.showEditor) {
         ImageEditor({
-          wallpaper: this.wallpaper,
-          localImg: this.localImg,
+          wallpaper: this.cur,
+          localImg: this.curLocalImg(),
           onClose: () => { this.showEditor = false; }
         })
       }
