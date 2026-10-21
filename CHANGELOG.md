@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-10-21：隐私/法律文案与线上站点对齐
+
+- `LegalTexts.ets`：更新日期/生效日期改为 2026-10-21；明确「浏览与收藏免登录，保存图片需登录」；
+  收藏注明仅本机、暂不与账号合并。`LEGAL_UPDATED_AT` 同步更新，老用户会重新看到隐私同意弹窗。
+- `PrivacyConsentDialog` 概要同步新规则。
+- `legal-site` 的 index/terms/about/self-check 与 README 同步：删除「不联网、零权限」「收藏跨设备同步」等过期表述；
+  线上地址统一为 `https://www.gqscc.cn/legal/`，不再使用 `gqs.404.kim`。
+- 核对确认：App 当前没有 Banner UI，`/api/v1/banners` 为空对用户无影响（后续启用需补空态）。
+- 待运维：把 `legal-site` 部署到 `www.gqscc.cn/legal/` 并在 AGC 后台修改隐私政策 URL。
+
+---
+
 ## 2026-10-21：保存登录门槛落地
 
 - 三个保存入口统一接入登录门槛：预览页保存、编辑器导出、贴纸专区保存。

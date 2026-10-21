@@ -77,12 +77,12 @@
 
 | 级别 | 问题 | 依据 |
 |---|---|---|
-| P0 | 隐私政策 URL `https://gqs.404.kim/` 实际打开的是「随机二次元图片 API」站点，证书不匹配，`/terms.html`、`/about.html` 均为 404 | 整改说明-1.1.0 §5.1 |
+| P0 | 隐私政策 URL 仍登记为 `https://gqs.404.kim/`（错站/证书不匹配）；`legal-site` 源与 README 已改为 `https://www.gqscc.cn/legal/`，**待部署并改 AGC 登记** | 整改说明-1.1.0 §5.1 + 2026-10-21 文档更新 |
 | ✅ | **保存登录门槛已实现**：预览保存、编辑器导出、贴纸专区保存三个入口均要求登录；游客仍可浏览与收藏，收藏暂不与账号合并 | PRD v0.3 + 代码 |
 | P0 | 「单机应用/不联网」的备案与隐私表述，与恢复 INTERNET、调用后端接口的现状冲突 | 对比整改说明 与 CLOUD-CUTO-REBUILD-PLAN |
 | P1 | 最新一期 Hero 已关联 `wallpaperId=1599`（可保存），但该壁纸 width/height=0、标题「第 0 期」；历史期与后续运营是否都关联需逐期核对 | 2026-10-21 公开接口实测 |
 | P1 | 首页 Hero 依赖后台 `daily` 合辑（`source='daily'`、limitCount≥14），未配置或接口失败时首页为空 | CLOUD-CUTO-REBUILD-PLAN §一 |
-| P1 | `GET /api/v1/banners` 返回空数组，首页 Banner 区无内容（若 App 展示该区） | 2026-10-21 公开接口实测 |
+| — | `GET /api/v1/banners` 返回空数组；App 当前**没有 Banner UI**，对用户无影响（后续启用需补空态） | 2026-10-21 公开接口/代码核对 |
 | — | 「升级 Plus」已拍板**不做会员/支付**：需全量核对并删除相关入口、文案与市场材料 | PRD v0.3 |
 | P2 | `CropGeometry.test.ets` 未跟随 `CropView` 新字段，`hvigor test` 编译失败 | 整改说明-1.1.0 §六 |
 | P0（运维） | 后台仓库脚本（如 `check_admin_account.py`）内含明文服务器 root 与数据库口令，`.env` 亦含明文密钥 | 本地后台仓库检查；**凭据必须立即轮换并从脚本中移除** |
