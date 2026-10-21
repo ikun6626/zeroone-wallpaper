@@ -40,6 +40,16 @@ export struct CategoryPage {
   /** 颜色筛选：可选主色清单 + 当前选中（空串=不筛） */
   @State colors: ColorBrief[] = [];
   @State pickedColor: string = '';
+  /** 标签筛选：从当前合辑已加载内容里提取，选中后走服务端 ?tag= */
+  @State pickedTag: string = '';
+  @State tagOptions: string[] = [];
+  /** 搜索关键词：合辑列表按名称过滤；详情按已加载壁纸的标题/标签/分类过滤 */
+  @State keyword: string = '';
+  /** 本地快捷筛选：竖屏 / 高清（基于后台回填的尺寸与朝向） */
+  @State onlyPortrait: boolean = false;
+  @State onlyHd: boolean = false;
+  /** 关键词过滤后的详情条数（0 时显示空结果提示） */
+  @State filteredCount: number = 0;
   /**
    * 当前合辑（含颜色筛选）的服务端总数，来自详情接口的 `total` 字段
    * （物化数据集去重 + 按当前筛选条件过滤后的真实张数）。
@@ -153,27 +163,98 @@ export struct CategoryPage {
     }
 
     if (this.fallback) {
-      // 兜底模式：直接在内存里过滤
-      const picked: Wallpaper[] = [];
-      const cur: AlbumBrief | undefined = this.current;
-      for (let i = 0; i < this.catalogWallpapers.length; i++) {
-        const w: Wallpaper = this.catalogWallpapers[i];
-        if (cur !== undefined && w.category === cur.name) {
-          if (next.length === 0 || w.dominantColor === next) {
-            picked.push(w);
-          }
-        }
-      }
-      this.items = picked;
-      this.detailDs.updateAll(picked);
+      // 兜底模式：直接在内存里按分类 + 颜色 + 标签过滤
+      this.refreshLocalItems();
       return;
     }
+    this.reloadServerItems();
+  }
+
+  /** 选中/取消标签（服务端按 tag 名称过滤；可与颜色叠加） */
+  private pickTag(tag: string): void {
+    this.pickedTag = this.pickedTag === tag ? '' : tag;
+    Haptics.light();
+    if (this.current === undefined) {
+      return;
+    }
+    if (this.fallback) {
+      this.refreshLocalItems();
+      return;
+    }
+    this.reloadServerItems();
+  }
+
+  /** 颜色/标签变化后重新拉第一页（共用入口，避免两套状态清理逻辑） */
+  private reloadServerItems(): void {
     this.items = [];
     this.detailDs.updateAll([]);
     this.page = 0;
     this.hasMore = false;
     this.totalNum = 0;
+    this.filteredCount = 0;
     this.loadPage(true);
+  }
+
+  /** 从已加载壁纸中提取标签选项（去重，最多 16 个） */
+  private collectTags(list: Wallpaper[]): void {
+    const out: string[] = [];
+    for (let i = 0; i < list.length; i++) {
+      const tags: string[] = list[i].tagList;
+      for (let j = 0; j < tags.length; j++) {
+        const t: string = tags[j].trim();
+        if (t.length > 0 && out.indexOf(t) === -1) {
+          out.push(t);
+        }
+      }
+    }
+    this.tagOptions = out.slice(0, 16);
+  }
+
+  /** 详情关键词过滤：标题 / 标签 / 分类（空关键词恢复全部已加载内容） */
+  private applyDetailFilter(): void {
+    const k: string = this.keyword.trim().toLowerCase();
+    let base: Wallpaper[] = this.items;
+    if (this.onlyPortrait) {
+      base = base.filter((w: Wallpaper): boolean =>
+        w.orientation === 'P' || (w.width > 0 && w.height >= w.width));
+    }
+    if (this.onlyHd) {
+      base = base.filter((w: Wallpaper): boolean =>
+        Math.max(w.width, w.height) >= 1440 && Math.min(w.width, w.height) >= 900);
+    }
+    let out: Wallpaper[] = base;
+    if (k.length > 0) {
+      out = base.filter((w: Wallpaper): boolean =>
+        w.title.toLowerCase().indexOf(k) >= 0 ||
+          w.tags.toLowerCase().indexOf(k) >= 0 ||
+          w.category.toLowerCase().indexOf(k) >= 0);
+    }
+    this.filteredCount = out.length;
+    this.detailDs.updateAll(out);
+  }
+
+  /** 兜底模式：按分类 + 颜色 + 标签过滤本地目录，再套关键词 */
+  private refreshLocalItems(): void {
+    const cur: AlbumBrief | undefined = this.current;
+    if (cur === undefined) {
+      return;
+    }
+    const picked: Wallpaper[] = [];
+    for (let i = 0; i < this.catalogWallpapers.length; i++) {
+      const w: Wallpaper = this.catalogWallpapers[i];
+      if (w.category !== cur.name) {
+        continue;
+      }
+      if (this.pickedColor.length > 0 && w.dominantColor !== this.pickedColor) {
+        continue;
+      }
+      if (this.pickedTag.length > 0 && w.tagList.indexOf(this.pickedTag) === -1) {
+        continue;
+      }
+      picked.push(w);
+    }
+    this.items = picked;
+    this.applyDetailFilter();
   }
 
   /** 按 slug 精确找合辑（用于首页「更多」跳转） */
@@ -262,6 +343,12 @@ export struct CategoryPage {
     this.hasMore = false;
     this.totalNum = 0;
     this.pickedColor = '';
+    this.pickedTag = '';
+    this.keyword = '';
+    this.onlyPortrait = false;
+    this.onlyHd = false;
+    this.tagOptions = [];
+    this.filteredCount = 0;
     if (this.fallback) {
       // 兜底模式：直接从内存里的列表取，不发请求
       const picked: Wallpaper[] = [];
@@ -271,7 +358,8 @@ export struct CategoryPage {
         }
       }
       this.items = picked;
-      this.detailDs.updateAll(picked);
+      this.collectTags(picked);
+      this.applyDetailFilter();
       return;
     }
     this.loadPage(true);
@@ -285,6 +373,13 @@ export struct CategoryPage {
     this.page = 0;
     this.hasMore = false;
     this.totalNum = 0;
+    this.pickedColor = '';
+    this.pickedTag = '';
+    this.keyword = '';
+    this.onlyPortrait = false;
+    this.onlyHd = false;
+    this.tagOptions = [];
+    this.filteredCount = 0;
   }
 
   /** 拉一页合辑内容（first=true 表示首屏） */
@@ -302,7 +397,7 @@ export struct CategoryPage {
       this.loadingMore = true;
     }
     const next: number = this.page + 1;
-    AlbumsApi.fetchAlbumPage(cur.slug, next, ApiConfig.PAGE_SIZE, this.pickedColor)
+    AlbumsApi.fetchAlbumPage(cur.slug, next, ApiConfig.PAGE_SIZE, this.pickedColor, 0, 0, this.pickedTag)
       .then((page: AlbumPage): void => {
       // 期间用户可能已经切走：丢弃过期结果
       if (this.current === undefined || this.current.slug !== cur.slug) {
@@ -316,7 +411,11 @@ export struct CategoryPage {
       this.totalNum = page.total > 0 ? page.total : this.totalNum;
       const merged: Wallpaper[] = first ? page.items : this.items.concat(page.items);
       this.items = merged;
-      this.detailDs.updateAll(merged);
+      // 只在"无筛选"的首屏提取标签选项，避免筛选后选项越来越少
+      if (first && this.pickedColor.length === 0 && this.pickedTag.length === 0) {
+        this.collectTags(merged);
+      }
+      this.applyDetailFilter();
       this.loadingItems = false;
       this.loadingMore = false;
     }).catch((): void => {
@@ -526,6 +625,135 @@ export struct CategoryPage {
     }
   }
 
+  /** 合辑列表按关键词过滤（名称 / 副标题） */
+  private visibleAlbums(): AlbumBrief[] {
+    const k: string = this.keyword.trim().toLowerCase();
+    if (k.length === 0) {
+      return this.albums;
+    }
+    return this.albums.filter((a: AlbumBrief): boolean =>
+      a.name.toLowerCase().indexOf(k) >= 0 ||
+        a.subtitle.toLowerCase().indexOf(k) >= 0);
+  }
+
+  /** 搜索框：列表搜合辑；详情搜已加载壁纸的标题/标签/分类 */
+  @Builder
+  searchBar() {
+    Row({ space: 8 }) {
+      TextInput({
+        text: this.keyword,
+        placeholder: this.current === undefined ? '搜索合辑 / 主题' : '搜索标题 / 标签'
+      })
+        .layoutWeight(1)
+        .height(36)
+        .fontSize(13)
+        .fontColor('#F2F2F5')
+        .placeholderColor('#7A7A85')
+        .backgroundColor('#1C1D22')
+        .borderRadius(18)
+        .padding({ left: 14, right: 14 })
+        .onChange((v: string): void => {
+          this.keyword = v;
+          if (this.current !== undefined) {
+            this.applyDetailFilter();
+          }
+        })
+      if (this.keyword.length > 0) {
+        Text('✕')
+          .fontSize(13)
+          .fontColor('#A8A8B5')
+          .width(28)
+          .height(28)
+          .textAlign(TextAlign.Center)
+          .backgroundColor('#1C1D22')
+          .borderRadius(14)
+          .onClick(() => {
+            this.keyword = '';
+            if (this.current !== undefined) {
+              this.applyDetailFilter();
+            }
+          })
+      }
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, bottom: 8 })
+  }
+
+  /** 标签筛选 chip 行（仅详情页；标签来自当前合辑已加载内容） */
+  @Builder
+  tagChips() {
+    if (this.tagOptions.length > 0) {
+      Scroll() {
+        Row({ space: 8 }) {
+          Text('全部标签')
+            .fontSize(12)
+            .fontColor(this.pickedTag.length === 0 ? Color.White : '#A8A8B5')
+            .backgroundColor(this.pickedTag.length === 0 ? '#C9333D' : '#1C1D22')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .borderRadius(14)
+            .onClick(() => {
+              if (this.pickedTag.length > 0) {
+                this.pickTag(this.pickedTag);
+              }
+            })
+          ForEach(this.tagOptions, (t: string) => {
+            Text(`#${t}`)
+              .fontSize(12)
+              .fontColor(this.pickedTag === t ? Color.White : '#A8A8B5')
+              .backgroundColor(this.pickedTag === t ? '#C9333D' : '#1C1D22')
+              .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+              .borderRadius(14)
+              .onClick(() => {
+                this.pickTag(t);
+              })
+          }, (t: string) => t)
+        }
+        .padding({ left: 12, right: 12 })
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .width('100%')
+      .height(34)
+      .edgeEffect(EdgeEffect.Spring)
+    }
+  }
+
+  /** 本地快捷筛选：竖屏 / 高清（基于后台回填的尺寸与朝向） */
+  @Builder
+  quickFilters() {
+    if (!this.fallback) {
+      Row({ space: 8 }) {
+      Text('竖屏')
+        .fontSize(12)
+        .fontColor(this.onlyPortrait ? Color.White : '#A8A8B5')
+        .backgroundColor(this.onlyPortrait ? '#C9333D' : '#1C1D22')
+        .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+        .borderRadius(14)
+        .onClick(() => {
+          this.onlyPortrait = !this.onlyPortrait;
+          Haptics.light();
+          this.applyDetailFilter();
+        })
+      Text('高清')
+        .fontSize(12)
+        .fontColor(this.onlyHd ? Color.White : '#A8A8B5')
+        .backgroundColor(this.onlyHd ? '#C9333D' : '#1C1D22')
+        .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+        .borderRadius(14)
+        .onClick(() => {
+          this.onlyHd = !this.onlyHd;
+          Haptics.light();
+          this.applyDetailFilter();
+        })
+      Text('高清 = 长边≥1440 且 短边≥900')
+        .fontSize(9)
+        .fontColor('#6F6F7A')
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 2, bottom: 6 })
+    }
+  }
+
   /** 合辑详情网格卡片：等比（Contain）完整展示，不裁切 */
   @Builder
   gridCard(item: Wallpaper) {
@@ -590,6 +818,9 @@ export struct CategoryPage {
         .width('100%')
         .padding({ left: 16, right: 16, top: 14, bottom: 10 })
 
+        // 搜索合辑名称 / 主题
+        this.searchBar()
+
         // ===== 合辑卡片墙（两列） =====
         // （颜色筛选只放在合辑详情页：列表页没有"当前合辑"语境，
         //   点颜色会被误跳到某个合辑 —— 2026-10-01 用户反馈已移除）
@@ -603,14 +834,14 @@ export struct CategoryPage {
           .width('100%')
           .layoutWeight(1)
           .justifyContent(FlexAlign.Center)
-        } else if (this.albums.length === 0) {
+        } else if (this.visibleAlbums().length === 0) {
           Column({ space: 12 }) {
             Text('📭').fontSize(44)
-            Text('还没有合辑')
+            Text(this.albums.length === 0 ? '还没有合辑' : '没有匹配的合辑')
               .fontSize(15)
               .fontWeight(FontWeight.Medium)
               .fontColor('#F2F2F5')
-            Text('下拉或稍后再来看看')
+            Text(this.albums.length === 0 ? '下拉或稍后再来看看' : '换个关键词试试')
               .fontSize(12)
               .fontColor('#A8A8B5')
           }
@@ -619,7 +850,7 @@ export struct CategoryPage {
           .justifyContent(FlexAlign.Center)
         } else {
           Grid() {
-            ForEach(this.albums, (col: AlbumBrief) => {
+            ForEach(this.visibleAlbums(), (col: AlbumBrief) => {
               GridItem() {
                 this.collectionCard(col)
               }
@@ -642,8 +873,14 @@ export struct CategoryPage {
       if (this.current !== undefined) {
         Column() {
           this.detailHeader(this.current)
+          // 搜索当前合辑已加载的壁纸
+          this.searchBar()
           // 颜色筛选（数据来自 /api/v1/colors；点选后按主色筛当前合辑）
           this.colorChips()
+          // 标签筛选（后端按 tag 名称过滤）
+          this.tagChips()
+          // 本地快捷筛选：竖屏 / 高清
+          this.quickFilters()
           if (this.loadingItems && this.items.length === 0) {
             Column({ space: 10 }) {
               LoadingProgress().width(32).height(32).color('#C9333D')
@@ -652,11 +889,13 @@ export struct CategoryPage {
             .width('100%')
             .layoutWeight(1)
             .justifyContent(FlexAlign.Center)
-          } else if (this.items.length === 0) {
+          } else if (this.filteredCount === 0) {
             Column() {
               Text('💤')
                 .fontSize(40)
-              Text('这个合辑暂时没有壁纸')
+              Text(this.keyword.trim().length > 0 ? '没有匹配的壁纸'
+                : (this.pickedTag.length > 0 || this.pickedColor.length > 0
+                  ? '当前筛选下没有壁纸' : '这个合辑暂时没有壁纸'))
                 .fontSize(13)
                 .fontColor('#A8A8B5')
             }

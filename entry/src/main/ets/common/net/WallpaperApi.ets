@@ -27,6 +27,9 @@ interface ApiWallpaper {
   publishedAt: string | null;
   /** 后台图片分析脚本标注的主色桶（旧数据可能为空） */
   dominantColor?: string | null;
+  width?: number;
+  height?: number;
+  orientation?: string | null;
 }
 
 interface ApiWallpaperPage {
@@ -139,6 +142,9 @@ export class WallpaperApi {
     // 主色桶：后台图片分析脚本标注（用于颜色合辑与标签筛选；旧数据没有则不填）
     const dom: string | null | undefined = a.dominantColor;
     w.dominantColor = (typeof dom === 'string') ? dom : '';
+    w.width = typeof a.width === 'number' ? a.width : 0;
+    w.height = typeof a.height === 'number' ? a.height : 0;
+    w.orientation = (typeof a.orientation === 'string') ? a.orientation : '';
     w.imageUrl = typeof a.imageUrl === 'string' ? a.imageUrl : '';
     w.thumbUrl = (a.thumbUrl !== null && a.thumbUrl !== undefined && typeof a.thumbUrl === 'string')
       ? a.thumbUrl : '';

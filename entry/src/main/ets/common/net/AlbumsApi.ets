@@ -37,6 +37,9 @@ interface ApiAlbumItem {
   imageUrl: string;
   thumbUrl: string | null;
   dominantColor?: string | null;
+  width?: number;
+  height?: number;
+  orientation?: string | null;
   category?: ApiCategoryRef | null;
   publishedAt?: string | null;
   /** 对应内置壁纸时后端会写入的本地目录 id（收藏 id 以它为准，与 /wallpapers 一致） */
@@ -256,13 +259,14 @@ export class AlbumsApi {
   }
 
   /**
-   * 合辑内容（分页；可按主色进一步筛选；失败返回空页）
+   * 合辑内容（分页；可按主色 / 标签进一步筛选；失败返回空页）
    *
    * minLongEdge/minShortEdge：仅首页分区传（后端按「长边≥minLongEdge 且 短边≥minShortEdge」
    * 过滤低清图，从根源避免首页出现 350×260、498×1080 这类糊图）。传 0 表示不过滤。
    */
   static async fetchAlbumPage(slug: string, page: number, pageSize: number,
-    color: string = '', minLongEdge: number = 0, minShortEdge: number = 0): Promise<AlbumPage> {
+    color: string = '', minLongEdge: number = 0, minShortEdge: number = 0,
+    tag: string = ''): Promise<AlbumPage> {
     const out = new AlbumPage();
     out.slug = slug;
     if (slug.length === 0) {
@@ -274,6 +278,9 @@ export class AlbumsApi {
     };
     if (color.length > 0) {
       query['color'] = color;
+    }
+    if (tag.length > 0) {
+      query['tag'] = tag;
     }
     if (minLongEdge > 0 && minShortEdge > 0) {
       query['minLongEdge'] = String(minLongEdge);
@@ -317,6 +324,9 @@ export class AlbumsApi {
     w.category = (a.category !== null && a.category !== undefined) ? a.category.name : '';
     const dom: string | null | undefined = a.dominantColor;
     w.dominantColor = (typeof dom === 'string') ? dom : '';
+    w.width = typeof a.width === 'number' ? a.width : 0;
+    w.height = typeof a.height === 'number' ? a.height : 0;
+    w.orientation = (typeof a.orientation === 'string') ? a.orientation : '';
     w.imageUrl = a.imageUrl;
     w.thumbUrl = (typeof a.thumbUrl === 'string' && a.thumbUrl.length > 0) ? a.thumbUrl : a.imageUrl;
     const when: string | null | undefined = a.date ?? a.publishedAt;
