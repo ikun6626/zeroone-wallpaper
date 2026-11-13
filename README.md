@@ -15,6 +15,22 @@
 | :---: | :---: | :---: | :---: |
 | <img src="docs/readme/01-home.jpg" width="220"> | <img src="docs/readme/02-gallery.jpg" width="220"> | <img src="docs/readme/03-preview.jpg" width="220"> | <img src="docs/readme/04-sticker.jpg" width="220"> |
 
+## 壁纸效果
+
+以下 16 张为应用内素材抽样（已压缩至 1000px 长边）：
+
+| | | | |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/showcase/01.jpg" width="150"> | <img src="docs/showcase/02.jpg" width="150"> | <img src="docs/showcase/03.jpg" width="150"> | <img src="docs/showcase/04.jpg" width="150"> |
+| <img src="docs/showcase/05.jpg" width="150"> | <img src="docs/showcase/06.jpg" width="150"> | <img src="docs/showcase/07.jpg" width="150"> | <img src="docs/showcase/08.jpg" width="150"> |
+| <img src="docs/showcase/09.jpg" width="150"> | <img src="docs/showcase/10.jpg" width="150"> | <img src="docs/showcase/11.jpg" width="150"> | <img src="docs/showcase/12.jpg" width="150"> |
+| <img src="docs/showcase/13.jpg" width="150"> | <img src="docs/showcase/14.jpg" width="150"> | <img src="docs/showcase/15.jpg" width="150"> | <img src="docs/showcase/16.jpg" width="150"> |
+
+> **关于壁纸素材**：类 App 的体积主要来自图片。本仓库只保留 16 张抽样图用于展示，
+> `entry/src/main/resources/base/media` 下的 680 个内置素材（约 39 MB）未纳入版本库。
+> 因此从仓库 clone 后的代码可直接阅读，但**直接编译会缺少图片资源**；
+> 需要在本地补齐素材后才能构建。这样处理是为了让仓库保持在十几 MB 量级、可被正常浏览与克隆。
+
 ## 功能
 
 - **每日精选**：首页大图卡片展示当天人工精选壁纸，按「第 N 期」归档
@@ -66,6 +82,10 @@ zeroone/
 ## 本地运行
 
 **环境**：DevEco Studio（支持 API 24 / HarmonyOS 6.1.1）· Java 17 · Node 18+
+
+> ⚠️ 仓库不含内置壁纸素材（`entry/src/main/resources/base/media`，680 个文件约 39 MB）与
+> `rawfile/frog_bg.gif`。clone 后需要先补齐这些资源，否则编译会因缺图报错。
+> 素材组织方式见 `AGENTS.md`，导入流程用 `tools/import_workbuddy_batch.py`。
 
 1. 用 DevEco Studio 打开本目录，等待 `oh_modules` 同步完成
 2. 配置签名：`File > Project Structure > Signing Configs` 勾选 *Automatically generate signature*
