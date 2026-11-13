@@ -76,7 +76,7 @@ zeroone/
 命令行打包（仓库未内置 hvigorw，用 DevEco 自带的那个）：
 
 ```bash
-# Windows
+# Windows（路径按本机 DevEco 安装位置调整）
 HVIGOR="/c/Program Files/Huawei/DevEco Studio/tools/hvigor/bin/hvigorw"
 # macOS
 # HVIGOR="/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw"
