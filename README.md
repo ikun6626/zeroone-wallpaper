@@ -57,6 +57,7 @@ zeroone/
 ├── tools/                          # 素材导入、去重、元数据生成等 Python 脚本
 ├── docs/                           # 设计与验收记录、上架素材
 ├── legal-site/                     # 隐私政策与用户协议静态页
+├── AGENTS.md                       # 给 AI Agent / 协作者的改动约定
 ├── 截图/                            # 应用市场截图与审核整改证据
 └── 软著材料/                        # 软件著作权登记材料
 ```
@@ -110,7 +111,7 @@ HVIGOR="/c/Program Files/Huawei/DevEco Studio/tools/hvigor/bin/hvigorw"
 3. 跑构建、跑用例、对照截图验收；失败时带上日志与上下文回退重试
 4. 把踩过的坑固化成 `AGENTS.md` 规则与 `tools/` 下的脚本，减少同类返工
 
-所以仓库里 `docs/`、`CHANGELOG.md`、`CURRENT-STATE.md` 的密度高于一般个人项目——它们不是文档洁癖，而是这套协作方式能跑通的前提。
+所以仓库里 `docs/`、`CHANGELOG.md`、`CURRENT-STATE.md` 的密度高于一般个人项目——它们不是文档洁癖，而是这套协作方式能跑通的前提。给 Agent 的硬性约定整理在 [AGENTS.md](AGENTS.md)：先读哪份文档、什么算改完、哪些东西绝对不能碰。
 
 ## 声明
 
