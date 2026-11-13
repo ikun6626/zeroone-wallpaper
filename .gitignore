@@ -78,3 +78,7 @@ agconnect-services.json
 /docs/上架素材/
 /docs/效果展示-*.png
 /docs/dedup-quarantine/
+
+# Python 编译缓存（曾是误入库的 .pyc）
+__pycache__/
+*.pyc
