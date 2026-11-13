@@ -3,10 +3,10 @@
 > 基于 HarmonyOS（ArkTS / ArkUI）原生开发的高清壁纸应用 —— 在线内容 + 本地兜底，支持每日精选、全库搜索、收藏云同步与贴纸编辑，已上架华为应用市场。
 
 <p>
-  <img alt="HarmonyOS" src="https://img.shields.io/badge/HarmonyOS-6.1.1%20(API%2024)-1a1a1a">
-  <img alt="ArkTS" src="https://img.shields.io/badge/Language-ArkTS-3178c6">
+  <img alt="HarmonyOS" src="https://img.shields.io/badge/HarmonyOS-6.1.1_API24-1a1a1a">
+  <img alt="ArkTS" src="https://img.shields.io/badge/ArkTS-ArkUI-3178c6">
   <img alt="Version" src="https://img.shields.io/badge/version-1.3.0-2ea44f">
-  <img alt="Store" src="https://img.shields.io/badge/AppGallery-已上架-e60012">
+  <img alt="AppGallery" src="https://img.shields.io/badge/AppGallery-published-e60012">
 </p>
 
 ## 截图
