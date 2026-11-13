@@ -99,15 +99,18 @@
 
 > 2026-10-25 已删除停留在历史版本或已完成使命的文档（ARCHITECTURE、DELIVERY、两份 CLOUD 计划、
 > AGC-云数据库接入步骤、RESTRUCTURE-PLAN、贴纸二合一、预览保存方案、App体检报告、整改说明 1.0.0 三件套、
-> docs-site 生成站等），内容均可从 git 历史与 CHANGELOG 找回。
+> docs-site 生成站等），内容均可从 CHANGELOG 找回。
+>
+> 2026-11-13 公开仓库整理：含服务器 / 数据库凭据、个人联系方式、上架与软著申报材料的文档已移出仓库
+> （本机保留于 `.local/private/`），因此 `HANDOFF.md`、`AGC-1.3.0提交清单.md` 等不再出现在本仓库。
 
 | 想了解什么 | 读哪份文档 |
 |---|---|
 | 项目现状（版本 / 形态 / 后台 / 已知问题） | 本文件（**唯一基准**） |
 | 产品定位与 P0/P1 验收标准 | `PRD.md` |
-| 构建 / 签名 / git 用法、交接与已知坑 | `HANDOFF.md` |
+| 构建 / 签名 / git 用法、给 Agent 的约定 | `AGENTS.md` |
 | 全部工程变更事实 | `CHANGELOG.md`（按时间倒序） |
-| 进行中待办 | `AGC-1.3.0提交清单.md`、`平板端适配待办.md`、`后端补丁-乱码颜色与搜索数据.md`、`USER-AUDIT.md` |
+| 进行中待办 | `平板端适配待办.md`、`后端补丁-乱码颜色与搜索数据.md`、`USER-AUDIT.md` |
 | 元数据治理流程（标题/标签补齐） | `tools/README.md` + `tools/metadata_draft.csv`（初稿已生成，待人工复核） |
 | 现行配色 / 对比度标准 + AGC 审核凭证 | `整改说明-1.1.0-色彩与动效.md`（+ html/pdf、`contrast-audit-report.txt`） |
 | 上架 / 软著凭证材料 | `软著材料\`、`截图\`、`APP首页截图-含名称.jpg`、`legal-site\`（待部署） |
