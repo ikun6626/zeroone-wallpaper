@@ -1,4 +1,5 @@
 import { AuthManager } from '../common/net/AuthManager';
+import { EditGuard } from '../common/utils/EditGuard';
 
 /**
  * LoginPage —— 登录页
@@ -21,6 +22,25 @@ export struct LoginPage {
   @State passwordVisible: boolean = false;
   @State loading: boolean = false;
   @State errorMsg: string = '';
+
+  /** 返回键处理注册 id（-1 = 未注册） */
+  private backId: number = -1;
+
+  aboutToAppear(): void {
+    // 覆盖层打开期间接管返回键：只关闭本覆盖层，不退出 App、不影响下层页面。
+    // 关闭（点 × / 登录成功）即注销；登录成功后的跳转仍由 AuthManager 广播驱动。
+    this.backId = EditGuard.push((): boolean => {
+      this.onClose();
+      return true;
+    });
+  }
+
+  aboutToDisappear(): void {
+    if (this.backId >= 0) {
+      EditGuard.pop(this.backId);
+      this.backId = -1;
+    }
+  }
 
   // ===== 青蛙池塘配色（取自背景 GIF） =====
   private readonly COLOR_DEEP: string = '#264653';     // 水域深青

@@ -1,4 +1,5 @@
 import { Wallpaper } from '../../model/Wallpaper';
+import { DedupKeeps } from '../constants/DedupKeeps';
 import { ApiConfig } from './ApiConfig';
 import { HttpClient, ApiResponse } from './HttpClient';
 
@@ -15,7 +16,8 @@ interface ApiTagRef {
   name: string;
 }
 
-interface ApiWallpaper {
+/** 导出供 FavoriteApi 复用：/favorites/my 返回同构行，解析规则必须一致 */
+export interface ApiWallpaper {
   id: number;
   title: string;
   description: string | null;
@@ -30,6 +32,10 @@ interface ApiWallpaper {
   width?: number;
   height?: number;
   orientation?: string | null;
+  /** 浏览数（后台统计；旧数据可能缺失） */
+  viewCount?: number;
+  /** 下载/保存数（后台统计；旧数据可能缺失） */
+  downloadCount?: number;
 }
 
 interface ApiWallpaperPage {
@@ -46,6 +52,8 @@ interface ApiWallpaperPage {
 export class WallpaperPage {
   items: Wallpaper[] = [];
   hasMore: boolean = false;
+  /** 后端返回的匹配总数（用于全库搜索结果条数显示；后端未返回时为 0） */
+  total: number = 0;
 }
 
 /**
@@ -63,9 +71,11 @@ export class WallpaperApi {
    * @param pageSize 每页条数（后端上限 50）
    * @param categoryId 可选：按分类过滤（后端数字分类 ID）
    * @param sort latest 最新（默认）/ hot 热门 / featured 精选
+   * @param keyword 可选：关键词（服务端按标题/标签模糊匹配，2026-10-25 全库搜索）
    */
   static async fetchPage(page: number, pageSize: number,
-    categoryId: number = -1, sort: string = 'latest'): Promise<ApiResponse<WallpaperPage>> {
+    categoryId: number = -1, sort: string = 'latest',
+    keyword: string = ''): Promise<ApiResponse<WallpaperPage>> {
     const query: Record<string, string> = {
       'page': String(page),
       'pageSize': String(pageSize),
@@ -73,6 +83,10 @@ export class WallpaperApi {
     };
     if (categoryId > 0) {
       query['categoryId'] = String(categoryId);
+    }
+    const kw: string = keyword.trim();
+    if (kw.length > 0) {
+      query['keyword'] = kw;
     }
     const resp: ApiResponse<ApiWallpaperPage> =
       await HttpClient.get<ApiWallpaperPage>(ApiConfig.PATH.WALLPAPERS, query);
@@ -82,6 +96,7 @@ export class WallpaperApi {
     }
     const out: WallpaperPage = new WallpaperPage();
     out.hasMore = resp.data.hasMore === true;
+    out.total = typeof resp.data.total === 'number' ? resp.data.total : 0;
     const rawList: ApiWallpaper[] = resp.data.list ?? [];
     for (let i = 0; i < rawList.length; i++) {
       const mapped: Wallpaper | null = WallpaperApi.toWallpaper(rawList[i]);
@@ -110,17 +125,21 @@ export class WallpaperApi {
 
   /**
    * 后端 JSON → Wallpaper 模型（防御式：字段缺失/类型不对返回 null，不让脏数据炸掉列表）
+   * 公开静态方法：/favorites/my 的行与此同构，FavoriteApi 复用同一套解析保证 id 规则一致。
    */
-  private static toWallpaper(a: ApiWallpaper): Wallpaper | null {
+  static toWallpaper(a: ApiWallpaper): Wallpaper | null {
     if (a === null || a === undefined || typeof a.id !== 'number' || typeof a.title !== 'string') {
       return null;
     }
     const w = new Wallpaper();
-    w.serverId = a.id;
+    // 读时去重：已知 pHash 重复组统一归一到 keep id，避免同一张图以两个 id 出现
+    const sid: number = DedupKeeps.keepOf(a.id);
+    w.serverId = sid;
     // 后端在 description 里记录了它对应的本地目录 id（seed 时写入）：
     // 沿用本地 id → 收藏记录跨数据源稳定；没有则是后台新增壁纸，用 c_ 前缀。
     const desc: string | null = a.description;
-    w.id = (desc !== null && desc !== undefined && desc.length > 0) ? desc : `c_${a.id}`;
+    w.id = (!DedupKeeps.isDup(a.id) && desc !== null && desc !== undefined && desc.length > 0)
+      ? desc : `c_${sid}`;
     w.title = a.title;
     w.category = (a.category !== null && a.category !== undefined) ? a.category.name : '';
     w.author = 'ZeroOne';
@@ -145,6 +164,11 @@ export class WallpaperApi {
     w.width = typeof a.width === 'number' ? a.width : 0;
     w.height = typeof a.height === 'number' ? a.height : 0;
     w.orientation = (typeof a.orientation === 'string') ? a.orientation : '';
+    // 角标数值只信任接口：非数字/负数/NaN 一律归 0（UI 侧 0 不渲染）
+    w.viewCount = (typeof a.viewCount === 'number' && Number.isFinite(a.viewCount) && a.viewCount > 0)
+      ? Math.floor(a.viewCount) : 0;
+    w.downloadCount = (typeof a.downloadCount === 'number' && Number.isFinite(a.downloadCount) && a.downloadCount > 0)
+      ? Math.floor(a.downloadCount) : 0;
     w.imageUrl = typeof a.imageUrl === 'string' ? a.imageUrl : '';
     w.thumbUrl = (a.thumbUrl !== null && a.thumbUrl !== undefined && typeof a.thumbUrl === 'string')
       ? a.thumbUrl : '';

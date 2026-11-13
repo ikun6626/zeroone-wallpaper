@@ -2,6 +2,7 @@ import preferences from '@ohos.data.preferences';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@ohos.base';
 import { Wallpaper } from '../../model/Wallpaper';
+import { LocalWallpapers } from '../constants/LocalWallpapers';
 
 /**
  * PreferenceUtil —— 本地收藏工具
@@ -19,6 +20,12 @@ export class PreferenceUtil {
   private static readonly KEY_FAVORITES: string = 'favorite_wallpaper_ids';
   /** 收藏快照存储键（收藏时记录的壁纸对象，数组按收藏时间倒序） */
   private static readonly KEY_FAV_ITEMS: string = 'favorite_items_v1';
+  /**
+   * 收藏发生变化的通知回调（2026-10-25 收藏云同步用）。
+   * FavoriteSync.init() 注册；PreferenceUtil 不 import 网络层，避免循环依赖。
+   * toggleFavoriteItem（用户操作）会触发；ensureFavorite（云端拉回）不触发。
+   */
+  static onFavoriteChanged: ((id: string, item: Wallpaper | undefined, added: boolean) => void) | null = null;
   /**
    * 收藏在 AppStorage 中的镜像键（跨 Tab 单一数据源）
    *
@@ -86,13 +93,46 @@ export class PreferenceUtil {
     if (PreferenceUtil.favCache === undefined) {
       const raw: string = PreferenceUtil.getPrefs()
         .getSync(PreferenceUtil.KEY_FAVORITES, '[]') as string;
+      let parsed: string[] = [];
       try {
-        PreferenceUtil.favCache = JSON.parse(raw) as string[];
+        parsed = JSON.parse(raw) as string[];
       } catch (e) {
-        PreferenceUtil.favCache = [];
+        parsed = [];
+      }
+      const migrated: string[] = PreferenceUtil.migrateDedupAliases(parsed);
+      PreferenceUtil.favCache = migrated;
+      // 淘汰的重复图 id 迁移到保留 id：需要落盘，避免下次启动又读回旧 id
+      let dirty: boolean = migrated.length !== parsed.length;
+      for (let i = 0; i < migrated.length && !dirty; i++) {
+        dirty = migrated[i] !== parsed[i];
+      }
+      if (dirty) {
+        PreferenceUtil.write(PreferenceUtil.KEY_FAVORITES, JSON.stringify(migrated));
       }
     }
     return PreferenceUtil.favCache;
+  }
+
+  /**
+   * 收藏 id 的重复图别名迁移：淘汰 id → 保留 id，并去掉合并后的重复项。
+   * 只改本地收藏，不动云端收藏（云端按 serverId 表示，本批不涉及后端）。
+   */
+  private static migrateDedupAliases(ids: string[]): string[] {
+    const out: string[] = [];
+    let changed: boolean = false;
+    for (let i = 0; i < ids.length; i++) {
+      const id: string = ids[i];
+      const keep: string = LocalWallpapers.resolveId(id);
+      if (keep !== id) {
+        changed = true;
+      }
+      if (out.indexOf(keep) < 0) {
+        out.push(keep);
+      } else {
+        changed = true;
+      }
+    }
+    return changed ? out : ids;
   }
 
   /** 获取全部收藏的壁纸 ID（返回副本，外部修改不影响缓存） */
@@ -177,7 +217,71 @@ export class PreferenceUtil {
       kept.unshift(item);
     }
     PreferenceUtil.setString(PreferenceUtil.KEY_FAV_ITEMS, JSON.stringify(kept));
+    // 通知云同步（登录态下增量上/下云；游客态无人监听，回调为空）
+    if (PreferenceUtil.onFavoriteChanged !== null) {
+      PreferenceUtil.onFavoriteChanged(id, item, added);
+    }
     return added;
+  }
+
+  /**
+   * 按目标状态设置收藏（幂等），供「状态可能滞后」的入口使用（如卡片爱心）。
+   *
+   * 为什么不能直接 toggle：卡片爱心如果没及时回显，用户会重复点击，
+   * 而每次 toggle 都会翻转一次，最终可能「用户以为已收藏、实际已取消」。
+   * 这里先读当前状态（含 c_<serverId> 别名），与目标一致时直接返回，不做任何写入。
+   *
+   * @param favorite true = 收藏 / false = 取消
+   * @returns 操作后的实际收藏状态
+   */
+  static setFavoriteItem(id: string, item: Wallpaper | undefined, favorite: boolean): boolean {
+    let alias: string = '';
+    if (item !== undefined && item.serverId > 0) {
+      const a: string = `c_${item.serverId}`;
+      if (a !== id) {
+        alias = a;
+      }
+    }
+    const ids: string[] = PreferenceUtil.favorites();
+    const has: boolean = ids.indexOf(id) >= 0 || (alias.length > 0 && ids.indexOf(alias) >= 0);
+    if (has === favorite) {
+      return has;
+    }
+    return PreferenceUtil.toggleFavoriteItem(id, item);
+  }
+
+  /**
+   * 并集添加收藏（不触发云回调）：云端收藏拉回本地时用（FavoriteSync）。
+   * 已收藏时补登记快照（老收藏可能没有快照，补上「最爱收藏」才能展示），返回 false；
+   * 新收藏返回 true 并登记到列表末尾（不改变现有收藏顺序）。
+   */
+  static ensureFavorite(id: string, item?: Wallpaper): boolean {
+    const ids: string[] = PreferenceUtil.favorites();
+    const snaps: Wallpaper[] = PreferenceUtil.getFavoriteItems();
+    const had: boolean = ids.indexOf(id) >= 0;
+    if (!had) {
+      ids.push(id);
+      PreferenceUtil.write(PreferenceUtil.KEY_FAVORITES, JSON.stringify(ids));
+    }
+    let snapChanged: boolean = false;
+    let hasSnap: boolean = false;
+    for (let i = 0; i < snaps.length; i++) {
+      if (snaps[i].id === id) {
+        hasSnap = true;
+        break;
+      }
+    }
+    if (!hasSnap && item !== undefined) {
+      snaps.unshift(item);
+      snapChanged = true;
+    }
+    if (!had || snapChanged) {
+      if (snapChanged) {
+        PreferenceUtil.setString(PreferenceUtil.KEY_FAV_ITEMS, JSON.stringify(snaps));
+      }
+      PreferenceUtil.publishFavorites();
+    }
+    return !had;
   }
 
   /**
@@ -195,7 +299,10 @@ export class PreferenceUtil {
           continue;
         }
         const w = new Wallpaper();
-        w.id = o.id;
+        w.id = LocalWallpapers.resolveId(o.id);
+        if (out.some((x: Wallpaper) => x.id === w.id)) {
+          continue;   // 淘汰 id 与保留 id 的快照合并后只保留一条
+        }
         w.title = typeof o.title === 'string' ? o.title : '';
         w.category = typeof o.category === 'string' ? o.category : '';
         w.dominantColor = typeof o.dominantColor === 'string' ? o.dominantColor : '';

@@ -36,3 +36,19 @@
 # 编辑器自动备份与工具缓存（可重新生成）
 /.backup-ets-*/
 /.trae/
+
+# ===== 上传 GitHub 前追加（临时产物 / 验收截图 / 分享包）=====
+/.tmp/
+/.tmp_privacy/
+/.trae-html-share-packages/
+/.screenshots/
+/.backup/
+/.workbuddy/
+*.tar
+
+# 构建日志与临时截图（本机产物）
+*.log
+/.tmp-home*.jpeg
+
+# 本机私有配置（含签名材料路径与口令，绝不入库）
+/.local/

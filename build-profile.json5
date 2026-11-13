@@ -1,37 +1,11 @@
 {
   "app": {
-    "signingConfigs": [
-      {
-        "name": "default",
-        "type": "HarmonyOS",
-        "material": {
-          "storeFile": "<SIGNING_DIR>/release.p12",
-          "storePassword": "<REDACTED>",
-          "keyAlias": "zeroone",
-          "keyPassword": "<REDACTED>",
-          "signAlg": "SHA256withECDSA",
-          "profile": "<SIGNING_DIR>/fabuRelease.p7b",
-          "certpath": "<SIGNING_DIR>/zeroone.cer"
-        }
-      },
-      {
-        "name": "release",
-        "type": "HarmonyOS",
-        "material": {
-          "storeFile": "<SIGNING_DIR>/zeroonekey.p12",
-          "storePassword": "<REDACTED>",
-          "keyAlias": "debugKey",
-          "keyPassword": "<REDACTED>",
-          "signAlg": "SHA256withECDSA",
-          "profile": "<SIGNING_DIR>/zeroone-wallpaperRelease.p7b",
-          "certpath": "<SIGNING_DIR>/zeroone.cer"
-        }
-      }
-    ],
+    // 签名材料（.p12 / .p7b / .cer 与口令）不入库，请在本机自行配置：
+    // DevEco Studio → File > Project Structure > Signing Configs → 勾选 Automatically generate signature
+    "signingConfigs": [],
     "products": [
       {
         "name": "default",
-        "signingConfig": "default",
         "targetSdkVersion": "6.1.1(24)",
         "compatibleSdkVersion": "6.1.1(24)",
         "runtimeOS": "HarmonyOS",

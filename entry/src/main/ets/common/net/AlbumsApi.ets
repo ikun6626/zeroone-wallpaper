@@ -1,4 +1,5 @@
 import { Wallpaper } from '../../model/Wallpaper';
+import { DedupKeeps } from '../constants/DedupKeeps';
 import { ApiConfig } from './ApiConfig';
 import { HttpClient, ApiResponse } from './HttpClient';
 
@@ -30,6 +31,34 @@ interface ApiCategoryRef {
   name: string;
 }
 
+/** 标签引用（合辑详情里的 tags，需映射回 Wallpaper.tags） */
+interface ApiTagRef {
+  id: number;
+  name: string;
+}
+
+/**
+ * 颜色名是否可用：只接受 1~4 个基本区/扩展A汉字。
+ *
+ * 线上曾出现 `dominant_color` 编码损坏（JSON 里是 U+FFFD 替换字符，如 "�Ȼ�"），
+ * 后端 /colors 把它当成独立颜色桶返回 count=1，App 会把它渲染成一个乱码 chip。
+ * 这类值一律丢弃 —— 改 App 修不了那一条坏数据，但可以不让它出现在界面上。
+ */
+function isValidColorName(name: string): boolean {
+  const n: number = name.length;
+  if (n === 0 || n > 4) {
+    return false;
+  }
+  for (let i = 0; i < n; i++) {
+    const code: number = name.charCodeAt(i);
+    const cjk: boolean = (code >= 0x4E00 && code <= 0x9FFF) || (code >= 0x3400 && code <= 0x4DBF);
+    if (!cjk) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /** 后端合辑详情里的单张壁纸（字段比 /wallpapers 精简，daily 合辑甚至没有分类/尺寸） */
 interface ApiAlbumItem {
   id: number;
@@ -40,7 +69,12 @@ interface ApiAlbumItem {
   width?: number;
   height?: number;
   orientation?: string | null;
+  /** 浏览数（后台统计；旧数据可能缺失） */
+  viewCount?: number;
+  /** 下载/保存数（后台统计；旧数据可能缺失） */
+  downloadCount?: number;
   category?: ApiCategoryRef | null;
+  tags?: ApiTagRef[] | null;
   publishedAt?: string | null;
   /** 对应内置壁纸时后端会写入的本地目录 id（收藏 id 以它为准，与 /wallpapers 一致） */
   description?: string | null;
@@ -115,6 +149,15 @@ export class ColorBrief {
 export class AppStats {
   wallpapers: number = 0;
   albums: number = 0;
+}
+
+/** 每日精选往期卡（首页横向日期列表用） */
+export class DailyHistoryItem {
+  issueNo: number = 0;
+  /** 后端原始日期（ISO） */
+  date: string = '';
+  imageUrl: string = '';
+  wallpaper: Wallpaper = new Wallpaper();
 }
 
 /** 合辑分页结果 */
@@ -250,6 +293,10 @@ export class AlbumsApi {
       if (r === null || r === undefined || typeof r.color !== 'string' || r.color.length === 0) {
         continue;
       }
+      // 丢弃编码损坏的颜色名（U+FFFD 等），避免渲染乱码 chip
+      if (!isValidColorName(r.color)) {
+        continue;
+      }
       const c = new ColorBrief();
       c.color = r.color;
       c.count = typeof r.count === 'number' ? r.count : 0;
@@ -259,14 +306,15 @@ export class AlbumsApi {
   }
 
   /**
-   * 合辑内容（分页；可按主色 / 标签进一步筛选；失败返回空页）
+   * 合辑内容（分页；可按主色 / 标签 / 关键词进一步筛选；失败返回空页）
    *
    * minLongEdge/minShortEdge：仅首页分区传（后端按「长边≥minLongEdge 且 短边≥minShortEdge」
    * 过滤低清图，从根源避免首页出现 350×260、498×1080 这类糊图）。传 0 表示不过滤。
+   * keyword：服务端按标题/标签模糊匹配（2026-10-25 全库搜索，跨全部分页页生效）。
    */
   static async fetchAlbumPage(slug: string, page: number, pageSize: number,
     color: string = '', minLongEdge: number = 0, minShortEdge: number = 0,
-    tag: string = ''): Promise<AlbumPage> {
+    tag: string = '', keyword: string = ''): Promise<AlbumPage> {
     const out = new AlbumPage();
     out.slug = slug;
     if (slug.length === 0) {
@@ -281,6 +329,9 @@ export class AlbumsApi {
     }
     if (tag.length > 0) {
       query['tag'] = tag;
+    }
+    if (keyword.trim().length > 0) {
+      query['keyword'] = keyword.trim();
     }
     if (minLongEdge > 0 && minShortEdge > 0) {
       query['minLongEdge'] = String(minLongEdge);
@@ -306,6 +357,41 @@ export class AlbumsApi {
     return out;
   }
 
+  /**
+   * 每日精选往期列表（首页横向日期列表用）：最新在最前。
+   *
+   * 后端 `/albums/daily` 每项带 `date` / `issueNo`，真实历史 15 期。
+   * 若后端以后只保留当天，返回长度 1 —— 调用方按「仅当天」隐藏往期行，
+   * 不回退伪造日期（回溯数据必须显式标注，不能冒充真实精选）。
+   */
+  static async fetchDailyHistory(pageSize: number = 20): Promise<DailyHistoryItem[]> {
+    const out: DailyHistoryItem[] = [];
+    const query: Record<string, string> = {
+      'page': '1',
+      'pageSize': String(pageSize)
+    };
+    const resp: ApiResponse<ApiAlbumDetail> =
+      await HttpClient.get<ApiAlbumDetail>(`${ApiConfig.PATH.ALBUMS}/daily`, query);
+    if (!resp.ok || resp.data === undefined || resp.data === null) {
+      return out;
+    }
+    const list: ApiAlbumItem[] = resp.data.list ?? [];
+    for (let i = 0; i < list.length; i++) {
+      const it: ApiAlbumItem = list[i];
+      const w: Wallpaper | null = AlbumsApi.toWallpaper(it);
+      if (w === null) {
+        continue;
+      }
+      const h = new DailyHistoryItem();
+      h.issueNo = typeof it.issueNo === 'number' ? it.issueNo : 0;
+      h.date = typeof it.date === 'string' ? it.date : '';
+      h.imageUrl = it.imageUrl;
+      h.wallpaper = w;
+      out.push(h);
+    }
+    return out;
+  }
+
   /** 后端合辑项 → Wallpaper（防御式：缺关键字段返回 null） */
   private static toWallpaper(a: ApiAlbumItem): Wallpaper | null {
     if (a === null || a === undefined || typeof a.imageUrl !== 'string' || a.imageUrl.length === 0) {
@@ -313,20 +399,39 @@ export class AlbumsApi {
     }
     const w = new Wallpaper();
     // 每日精选项没有壁纸 id：用负值区分，避免与真实壁纸 id 冲突（仅用于预览）
-    w.serverId = typeof a.id === 'number' ? a.id : -1;
+    const rawId: number = typeof a.id === 'number' ? a.id : -1;
+    // 读时去重：dup 归一到 keep id，和 /wallpapers 目录保持同一套 id
+    const sid: number = rawId > 0 ? DedupKeeps.keepOf(rawId) : rawId;
+    w.serverId = sid;
     // id 与 /wallpapers 目录接口保持同一套规则（WallpaperApi.toWallpaper）：
     // 对应内置壁纸（description 有本地 id）沿用本地 id —— 否则同一条壁纸两个
     // 接口给出不同 id，收藏后「最爱收藏」按 id 匹配不上。
-    const desc: string = (typeof a.description === 'string') ? a.description : '';
+    const desc: string = (!DedupKeeps.isDup(rawId) && typeof a.description === 'string') ? a.description : '';
     w.id = desc.length > 0 ? desc
-      : (typeof a.id === 'number' && a.id > 0) ? `c_${a.id}` : `daily_${a.issueNo ?? 0}`;
+      : (rawId > 0) ? `c_${sid}` : `daily_${a.issueNo ?? 0}`;
     w.title = typeof a.title === 'string' ? a.title : '';
     w.category = (a.category !== null && a.category !== undefined) ? a.category.name : '';
+    // tags 与 /wallpapers 保持同一逗号分隔模型：合辑详情此前恒空（标签筛选失效）
+    const tagNames: string[] = [];
+    if (a.tags !== null && a.tags !== undefined) {
+      for (let i = 0; i < a.tags.length; i++) {
+        const t: ApiTagRef = a.tags[i];
+        if (t !== null && t !== undefined && typeof t.name === 'string') {
+          tagNames.push(t.name);
+        }
+      }
+    }
+    w.tags = tagNames.join(',');
     const dom: string | null | undefined = a.dominantColor;
     w.dominantColor = (typeof dom === 'string') ? dom : '';
     w.width = typeof a.width === 'number' ? a.width : 0;
     w.height = typeof a.height === 'number' ? a.height : 0;
     w.orientation = (typeof a.orientation === 'string') ? a.orientation : '';
+    // 角标数值只信任接口：非数字/负数/NaN 一律归 0（UI 侧 0 不渲染）
+    w.viewCount = (typeof a.viewCount === 'number' && Number.isFinite(a.viewCount) && a.viewCount > 0)
+      ? Math.floor(a.viewCount) : 0;
+    w.downloadCount = (typeof a.downloadCount === 'number' && Number.isFinite(a.downloadCount) && a.downloadCount > 0)
+      ? Math.floor(a.downloadCount) : 0;
     w.imageUrl = a.imageUrl;
     w.thumbUrl = (typeof a.thumbUrl === 'string' && a.thumbUrl.length > 0) ? a.thumbUrl : a.imageUrl;
     const when: string | null | undefined = a.date ?? a.publishedAt;

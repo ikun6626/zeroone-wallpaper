@@ -1,4 +1,5 @@
 import { AuthManager } from '../common/net/AuthManager';
+import { EditGuard } from '../common/utils/EditGuard';
 
 /**
  * RegisterPage —— 注册页
@@ -22,6 +23,25 @@ export struct RegisterPage {
   @State loading: boolean = false;
   @State errorMsg: string = '';
   @State successMsg: string = '';
+
+  /** 返回键处理注册 id（-1 = 未注册） */
+  private backId: number = -1;
+
+  aboutToAppear(): void {
+    // 覆盖层打开期间接管返回键：只关闭本覆盖层（不退出 App）。
+    // 与登录页互切时各按 id 出栈，顺序不影响最终只保留当前页的处理器。
+    this.backId = EditGuard.push((): boolean => {
+      this.onClose();
+      return true;
+    });
+  }
+
+  aboutToDisappear(): void {
+    if (this.backId >= 0) {
+      EditGuard.pop(this.backId);
+      this.backId = -1;
+    }
+  }
 
   // ===== 青蛙池塘配色（与 LoginPage 一致） =====
   private readonly COLOR_DEEP: string = '#264653';

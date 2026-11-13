@@ -4,6 +4,101 @@
 
 ---
 
+## 2026-11-07：11.3 新素材导入（27 张）+ 本地 3 组重复图清理
+
+**App（hvigor test 46/46 通过；clean + assembleHap 通过）**
+
+- **11.3 导入 27 张**：源目录 `Z:\图片爬取\11.3` 实际 579 个文件、WorkBuddy 11.3 标签 580 条（`47d85cba...webp` 原文件不存在，未伪造）。按 `relative_path` 精确匹配 + 实际可解码 + 短边 ≥1080 + 比例 9:16~9:21，合格 28 条；剔除缺失文件后实际 **27 条**，全部导入；542 条低清、37 条比例不合、1 条缺失均未入库（未凑数）。
+- **标签阶段一规则**：WorkBuddy 原始 CSV 只读不改；App 标签只保留中文主题词，拒绝颜色词（保守：含任一颜色字即拒绝）、作者/摄影师、水印、版式/宣发词、英文与编号，按原顺序取前 4 个去重，实测每张 1~4 个。原始标签完整保留在导入清单 `workbuddy_raw_tags`。
+- **可复现工具**：新增 `tools/import_workbuddy_batch.py`（匹配/门槛/pHash/SHA-256/内部去重/既有 283 张比对/压缩写资源/生成清单）与 `tools/image_hash.py`（32×32 LANCZOS + 正交 DCT-II + 左上 8×8 中位数，汉明 ≤6）；`tools/gen_local_catalog.py` 改为从批次 CSV 生成 `LocalWallpapers.ets`，类目由实际条目稳定生成（新增 `风景/人物/创意/动漫/萌宠/卡通` 直接沿用 WorkBuddy 原始类目，未做阶段二重写）。
+- **本地 3 组重复清理**（SHA-256 + pHash ≤6 + 人工看图确认；保留规则：分辨率→体积→上架时间→id）：
+  - `jofy88_fall_1051300_1920_1` → 保留 `jofy88_fall_1051300`（SHA 相同，上架更早）
+  - `w1462_1c7d482e29` → 保留 `w1546_07bfd74f9c`（分辨率更大 502×1080 vs 499×1080）
+  - `w2004_160101601b` → 保留 `w3474_28910b7791`（同尺寸，体积更大）
+  - 淘汰主图+缩略图先移入 `docs/dedup-quarantine/2026-11-07/entry/src/main/resources/base/media/`（未永久删除），源 CSV（`base-51.csv` / `scenery.csv`）同步移除条目。
+- **别名与收藏**：`LocalWallpapers.DEDUP_ALIASES` 淘汰 id → 保留 id，`getLocalImg` / `getThumb` 均解析别名；`PreferenceUtil.favorites()` 读取时迁移旧收藏 id、去重合并并落盘，`getFavoriteItems()` 快照 id 同步迁移，不丢收藏；云端收藏（serverId）本批不改后端。
+- **数量与验证**：活跃主图 283 → 280（去 3）+ 27 = **307**（另有 12 张个人照片，media 主图共 319、缩略图 307）。`tools/verify_image_dedup.py` 全部通过：活跃主图 SHA 完全重复组 0、pHash ≤6 组 0；27 张与既有图 pHash ≤6 = 0、内部重复 0；导入清单 27 行全 IMPORT 且尺寸/比例/标签合规；淘汰 6 个文件不在 active media 且 quarantine 齐全。其他 280 张主图与缩略图未改动。
+- **未做**：首页 1.6.1、无限流、角标、埋点、服务器 296 张删除、生产库操作与部署均未涉及。
+- **返工补记（幂等 / dry-run 修复）**：`tools/import_workbuddy_batch.py` 原先会把当前批次 `w113-20261103.csv` 计入“既有主图”，重复执行时 27 张全部误判重复；且 `--dry-run` 仍会改写导入清单。现已修复：`existing_catalog_ids()` 排除当前批次 CSV；批次内 app_id 且主图+缩略图齐全的识别为 `ALREADY_IMPORTED`，复跑返回成功且零写入；`--dry-run` 完全不写 media / 批次 CSV / 清单；清单与批次 CSV 改为临时文件 + `os.replace` 原子替换，数量不符时不再覆盖既有成功清单；新增 `--rebuild-list` 从批次 CSV + WorkBuddy 原始 CSV 重建 27 行清单。实测：dry-run 前后 745 个项目文件哈希/时间戳 0 变化；真实导入连续两次均 exit=0，56 个相关文件（54 媒体 + 批次 CSV + 清单）哈希/时间戳 0 变化；清单恢复 27 行且逐行 IMPORT。
+
+---
+
+## 2026-11-07：1.5.0 P0（删除模拟设壁纸 / 首页搜索+全库结果 / 合辑双列瀑布流 / tags 映射）
+
+**App（hvigor test + clean + assembleHap 全部通过）**
+
+- **删除模拟设壁纸与预览**：删除 `common/components/SetWallpaperGuide.ets`；`ImagePreview` 移除普通/桌面/锁屏预览模式、模拟时钟日期、定时器、伪造图标/Dock/导航栏、guideKind 引导面板，工具栏收敛为「收藏 / 铺满适应 / 保存 / 编辑」并保持屏幕中线居中；保存分支不变（铺满=屏幕比例合成、适应=原图），toast 为「已保存 · 原图 / 铺满」并提示可在系统图库设为壁纸。`StickerPage` 删除 `SET_LOCK` / `SET_HOME` 分支、壁纸引导 import 与锁屏/桌面文案，保留 JPG/PNG 相册保存与单保存入口。
+- **首页搜索 + 图库全库搜索结果**：首页 Logo 下新增圆角搜索框；`Index` 新增 `openSearchReq`（「序号:关键词」，与 `openAlbumReq` 同机制）并切到图库 Tab。`CategoryPage` 新增全库搜索模式：直接调用 `WallpaperApi.fetchPage(page, pageSize, -1, 'latest', keyword)` 分页，展示真实 `total`、双列瀑布流、加载更多、空态与清空搜索；清空关键词恢复默认合辑列表。接口/断网失败时用 AppStorage `wallpaperList` 本地过滤兜底并明确提示，不伪装成权威 0 条。`WallpaperPage` 新增 `total` 并映射 `resp.data.total`。
+- **合辑详情双列瀑布流**：3 列 Grid 改为 `WaterFlow` + `FlowItem` 两列（横向 8 / 纵向 10 / 圆角 16），继续 `LazyForEach` + `WallpaperDataSource`；卡片高度仅由后端 `width/height` 的 `aspectRatio` 决定，缺失/非法尺寸回退 3:4，无回调重排；收藏、预览、分页与筛选保留，图库合辑封面仍为 3 列。
+- **AlbumsApi tags bug**：`toWallpaper` 将后端 `tags` 名称映射到 `Wallpaper.tags`（逗号分隔模型），修复合辑详情标签恒空。
+- **返工修正（review 阻断项）**：`MinePage` FAQ 删除「存为锁屏/桌面壁纸用图」承诺，改为保存 JPG/透明 PNG 后可去系统图库自行设置；`CategoryPage` 每次新的首屏关键词查询立即清空旧结果与旧离线/错误状态（`prepareFirstSearch`，过期响应仍按 `searchSeq` 丢弃），加载更多失败时置 `searchHasMore=false` 并提示重试，避免旧结果串词与请求风暴。已读取 `docs/workbuddy-image-tags-handoff.md` 与只读 CSV，核验 2075 行 / 2075 唯一路径 / 2075 行 vision / 0 空 tags / JSON 解析 0 失败 / SHA-256 一致。另修正 `MinePage` FAQ 登录说明：浏览/收藏/编辑/贴纸无需登录，保存到系统相册需要登录（与 `AuthManager.requireLoginForSave` 一致），注册仍为可选、账号可注销。
+
+---
+
+## 2026-10-25：后台部署 + 元数据导入 + 版本记录配置（线上已生效）
+
+- **后台部署完成**：`deploy_stage1_upload.py`（122 文件）→ `deploy_backend_targeted.py`（镜像构建 + 仅重建 backend 容器）。启动日志确认 `FavoritesController` 四条路由挂载；`prisma migrate status` 显示 5 个迁移全部应用（新增 `202609.../20261025000001_add_favorites`）；无 token 访问 `/favorites/my` 正确返回 401。
+- **元数据导入完成**（AI 代人工复核，策略：标签全采初稿=分类+主色+词典命中；标题只改 27 条「每日精选 · 第 0 期」→「每日精选·分类」；402 条内部编号标题保留待后续视觉打标）：
+  - `metadata_updates.sql`（27 条标题 UPDATE + 7936 条标签语句）已在服务器 MySQL 执行；
+  - 修正脚本发现并恢复了被批量替换覆盖的种子图主题标签（102 条既有关联 = 51 张种子图的 csv 主题标签）：`tools/metadata_seed_fix.sql` 回填，种子行现为「csv 主题标签 ∪ 分类/主色」；
+  - 结果：tags 表 61 个标签、3255 条壁纸关联；搜「自然风景」528 条、「日落」4 条、「猫」2 条、「每日精选」27 条。
+- **app_versions 配置完成**（`tools/app_version_config.sql`）：harmony / 1.2.0 / 1002000 / enabled=1 / 非强制，downloadUrl 指向应用市场详情页。效果：线上 1.2.0 用户 `needUpdate=false` 静默；1.1.0 及更早用户会收到更新引导（应用市场当前即在架 1.2.0，行为正确）。**1.3.0 过审后需 UPDATE 该行 version_code=1003000 并更新 update_content。**
+- 一次性运维脚本：`Z:\zeroone管理后台\_ops_20261025_*.py`（SSH 执行 SQL 与验证，复用 deploy 脚本连接方式）。
+
+---
+
+## 2026-10-25：1.4.0 第一~三批实施（公告 / 版本提示 / 反馈标识 / 收藏云同步 / 全库搜索 / 元数据工具）
+
+**App（clean + assembleHap + test 全部通过）**
+
+- **公告（回访闭环①）**：新增 `SystemApi`（`/notices`、`/versions/latest` 封装）与 `NoticePage` 覆盖层组件；「我的」页新增公告入口卡（副标题显示最新一条标题 + 条数角标），每次进入 Tab 刷新。
+- **版本更新提示（HANDOFF P1-6 收口，回访闭环②）**：`Index` 启动检查（合规：隐私政策同意前不发任何请求；首次同意后补查），有更新弹 `AlertDialog` 展示更新说明，非强制可「稍后再说」，`forceUpdate` 只给「立即更新」；下载地址由后台 `app_versions.downloadUrl` 配置。
+- **反馈增强（回访闭环③）**：登录用户提交反馈自动附 `userId`（后台「反馈管理」可定位到人）；游客行为不变。
+- **收藏并入账号（第二批，推翻此前「暂不合并」决策）**：
+  - 新增 `FavoriteApi`（`/favorites/my|batch|:id` 封装，复用 `WallpaperApi.toWallpaper` 保证 id 解析规则一致）与 `FavoriteSync`（登录成功：本地收藏批量上云 + 云端收藏拉回并集合并；登录态下本地收藏/取消增量同步，游客操作不受影响、下次登录补传；全部 fire-and-forget，失败不影响本地）。
+  - `PreferenceUtil` 新增 `onFavoriteChanged` 回调（解耦：数据层不引网络层）与 `ensureFavorite`（云端拉回专用、不触发回调、补快照）；`AuthManager.login` 成功后触发 `FavoriteSync.onLoginSync()`。
+  - 「我的」页收藏文案更新为「登录后收藏云端同步」。
+- **全库关键词搜索（HANDOFF P1-1 收口）**：合辑详情搜索改为服务端 `?keyword=`（防抖 400ms，**跨全部分页页生效**，此前只能搜已加载页）；`WallpaperApi.fetchPage` 与 `AlbumsApi.fetchAlbumPage` 增加 keyword 传参；离线兜底模式维持本地过滤。
+
+**后台（Z:\zeroone管理后台，nest build 通过，待部署）**
+
+- 新增 `favorites` 模块：`Favorite` 表（复合主键 + 双向级联删除，迁移 `20261025000001_add_favorites` 随容器启动自动应用）+ `/api/v1/favorites/my|batch|:wallpaperId`（App 用户 JWT 鉴权，全部幂等）。
+- `/api/v1/wallpapers` 与 `/api/v1/albums/:slug` 增加 `keyword`（标题/标签模糊，大小写不敏感）；合辑物化行补 `title` 列。部署与验证步骤见 `Z:\zeroone管理后台\DEPLOY-NOTES.md` 第十三节。
+
+**工具（第三批：元数据治理）**
+
+- `tools/gen_metadata_draft.py`：拉取全部线上壁纸生成元数据初稿（本地 csv 规范标题回填 + 文件名英文词典型 → 中文标签 + 分类/主色），**已实测产出 `tools/metadata_draft.csv`：1605 条，其中内部编号标题 402 条为重点治理对象**。
+- `tools/apply_metadata.py`：复核后 CSV → 幂等 SQL（标题 UPDATE + 标签 DELETE/INSERT IGNORE，`_TagToWallpaper` 中间表），已用合成数据验证。
+- `tools/README.md`：治理四步流程（初稿 → 人工复核 reviewed_* 两列 → 生成 SQL → 服务器执行）。
+
+**待办衔接**：后台 favorites/keyword 部署后收藏云同步与全库搜索才生效；元数据待人工复核导入；第四批（每日精选推送 + 桌面服务卡片）按 2026-10-25 决策后续实施。
+
+---
+
+## 2026-10-25：1.4.0 产品方向拍板（对照头部开源项目差距分析）
+
+- 对照基准：Muzei / WallYou（其核心「自动换壁纸」在鸿蒙三方应用不可用，本产品以内容发现 + 回访闭环取胜）、
+  Wallhaven（搜索与筛选标杆：标签/颜色/分辨率/排序）、Walli / Zedge / Backdrops（预览、创作者、小组件）。
+  结论：体验层（首页/预览/编辑器）已不落后；差距集中在**内容元数据**（tags 全空致搜索空转）与**回访闭环**（后台 notices/feedbacks/app-versions/stats 模块已建但 App 未接）。
+- 拍板决策（已记入 CURRENT-STATE「产品决策」表）：
+  1. 内容供给：**后台人工补元数据**（1598 张补真实标题+标签，脚本推断初稿+人工复核）；不接 Pexels/Wallhaven 图源，不做 UGC。
+  2. 回访闭环四件套（1.4.0 全做）：公告+意见反馈入口、版本更新提示（三个接口现成）、每日精选推送提醒（AGC Push）、桌面服务卡片（每日精选，多规格适配）。
+  3. **收藏并入账号**：登录后云同步，游客先收藏、登录时本地合并上云；需后台新增 favorites 模块。
+  4. 编辑器/贴纸专区：守住现状，只修不做新（不加 AI 生成、不加模板）。
+- 依赖提示：推送与卡片引入新权限/能力，**必须与现行 P0（隐私政策 URL、单机备案表述）一并修订**后再上架；元数据治理与搜索后端 `keyword` 过滤（见 2026-10-21 P1 条目）联动。
+
+---
+
+## 2026-10-25：仓库冗余清理（不改代码）
+
+- 删除已完成使命 / 已过时的文档：`AGC-云数据库接入步骤`、`CLOUD-ASSETS-AND-RELEASE-PLAN`、`CLOUD-CUTO-REBUILD-PLAN`（已实施）、`RESTRUCTURE-PLAN`（剩余项已并入 HANDOFF/PRD 的 P1-2 轻编辑）、`ARCHITECTURE`、`DELIVERY`（均停留在 9-13 离线版）、`贴纸专区-二合一方案与实施记录`、`预览保存-跟随显示方式-方案`、`App体检报告`（三个问题已于 10-21 全修）、`整改说明.md/.html/.pdf`（1.0.0 单机版表述失效；**1.1.0 版三件套保留**，为现行对比度标准与 AGC 凭证）。
+- 删除生成产物与重复副本：`docs-site/`（生成脚本 `tools/build_docs_site.py` 一并删除）、`legal-site.zip`（源目录仍在且更新）、`assets-local/wallpapers/`（与 resources 内文件字节相同的暂存输出；csv 数据源保留）、`assets-out/thumbs/`、根目录 `ZeroOne.png`（无引用）、`截图/上传用/`（已被未跟踪的 `上传用-1.3.0/` 取代）及截图根目录 4 张散图与临时文件。
+- 删除死脚本：`tools/prepare_cloud_assets.py`（AGC 云存储时代，路线已弃）。
+- 本机磁盘清理（不入库项）：`entry/build`、`build`、`.backup-ets-*`、`.trae`、`.appanalyzer`；无关项目 `dsh-deep-whale/` 移至 `E:\dsh-deep-whale`。
+- 保留的文档集与用途见 `CURRENT-STATE.md` 第五节「文档地图」；`CURRENT-STATE` / `PRD` 中指向已删文档的引用已改为指向 CHANGELOG。所有被删的 git 跟踪文件均可从 git 历史找回。
+
+---
+
 ## 2026-10-21：P1 图库搜索与筛选
 
 - 图库列表新增搜索框：按合辑名称/副标题过滤。
@@ -154,6 +249,148 @@
 ### 规则
 
 此后任何状态变化：先更新 CURRENT-STATE.md，再同步 PRD / CHANGELOG。
+
+---
+
+## 2026-10-22：文案纠偏 —— 删除「跨设备同步收藏」等不实描述
+
+### 背景
+
+核对 AGC 提交文案时发现，**账号页与应用自测报告生成脚本**仍保留旧口径：
+「账号用于跨设备同步收藏与获取每日精选」「不登录无法完整体验」「保存到相册无需登录」等，
+与当前产品决策（收藏仅本机、保存需登录）矛盾，属审核风险。
+
+### 改动
+
+- [AccountPage.ets#L246](file:///e:/zeroone/entry/src/main/ets/common/components/AccountPage.ets#L246)：
+  「账号用于跨设备同步收藏与获取每日精选」→「账号用于保存图片；收藏保存在本机，暂不跨设备同步」。
+- [gen_self_check.py](file:///e:/zeroone/legal-site/gen_self_check.py)：
+  - 测试账号说明：删除「收藏同步」「不登录无法完整体验」，改为「浏览/收藏/编辑免登录，仅保存需登录」；
+  - 核心功能：内置壁纸 → 「在线壁纸 + 内置兜底」；删除「收藏同步」条目；反馈改为「无需登录、纯文字」；
+  - 审核流程：不登录路径删掉「保存到相册无需登录」；登录路径改为验证保存；收藏注明不同步；
+  - 每日精选描述改为与 App 实际 UI 一致（日期 + 第 X 期）；
+  - 法律文本一致性日期 2026-09-28 → 2026-10-21。
+
+> 说明：`self-check.html` 当前内容已是正确口径，本次只修生成脚本，避免重新生成时被旧文案覆盖。
+
+### 验证
+
+`hvigorw assembleHap --mode module -p product=default -p buildMode=release`：**BUILD SUCCESSFUL**（21.7s）。
+
+### 不在代码内（需在 AGC 网页改）
+
+提交用「应用一句话简介」（≤17 字符）与「应用介绍」中的三处描述：收藏不同步、
+不登录可浏览在线内容（内置为兜底）、图库按合辑 + 搜索/筛选（不是分类/标签）。
+
+---
+
+## 2026-10-22：发布素材 —— 1.3.0 应用介绍截图（1080×1920 ×5）
+
+### 背景
+
+提交新版本时旧截图已过时（第 3 张仍是「贴纸工作台」，现为「贴纸专区」；图库页新增了
+搜索与筛选）。按 AGC 手机素材规范重拍：竖向 1080×1920、9:16、PNG ≤5MB、3~10 张。
+
+### 产出
+
+目录：`e:\zeroone\截图\上传用-1.3.0\`
+
+| 文件 | 内容 | 体积 |
+|---|---|---|
+| `01-首页.png` | 首页 Hero（10月22日 第23期）+ 动物萌宠分区 | 2.83 MB |
+| `02-图库.png` | 图库合辑列表（8 个合辑） | 1.67 MB |
+| `03-合辑筛选.png` | 合辑详情：搜索框、主色 chip、竖屏/高清、共 300 张 | 1.59 MB |
+| `04-贴纸专区.png` | 贴纸专区：三步引导、画布贴纸、贴纸分类 | 0.88 MB |
+| `05-全屏预览.png` | 全屏预览 + 磨砂胶囊（收藏/预览模式/铺满/保存/编辑） | 1.77 MB |
+
+来源：Pura 90 模拟器（1320×2856）实机截图，裁切状态栏与底部 Tab 栏后缩放到 1080×1920；
+贴纸页额外裁掉底部「删除选中/清空」行，避免半截按钮。
+
+### 尚未完成
+
+- `AppScope/app.json5` 仍是 `1002000 / 1.2.0`，与在架版本相同 —— **上传前必须升版本号**
+  （建议 1.3.0 / 1003000 / build 3），再 `assembleApp` 打 `.app` 并核对 `pack.info`。
+
+---
+
+## 2026-10-21（下午）：乱码颜色 chip + 搜索计数 + 工具行 + 预览时钟 + 贴纸空态
+
+### 背景（用户反馈）
+
+> 「有bug,现在有乱码标签」
+
+实机扫描（模拟器 Pura 90，release 包）复现并定位：
+
+- 合辑详情颜色 chip 行出现「灰点 + 乱码」第三个 chip（`全部` 之后）。
+- 点它会筛出「共 0 张」+「当前筛选下没有壁纸」。
+- `GET /api/v1/colors` 原始字节：`EF BF BD C8 BB EF BF BD`，即 JSON 里就是
+  U+FFFD 替换字符（`"�Ȼ�", count=1`）—— **服务端数据损坏，App 只是照实渲染**。
+- 另发现：搜「雪山」→「没有匹配的壁纸」，但右上角仍写「共 101 张」；编辑器 6 个
+  工具 chip 一屏放不下（要横滑，滑后首 chip 被裁成红边）；桌面预览的返回按钮压住时钟首位数字。
+
+### 改动（App 侧，全部实测通过）
+
+| 文件 | 改动 |
+|---|---|
+| [AlbumsApi.ets](file:///e:/zeroone/entry/src/main/ets/common/net/AlbumsApi.ets#L33-L53) | 新增 `isValidColorName()`：只接受 1~4 个 CJK 汉字，过滤 U+FFFD 等坏值，乱码 chip 不再渲染 |
+| [CategoryPage.ets](file:///e:/zeroone/entry/src/main/ets/pages/CategoryPage.ets#L213-L221) | 新增 `headerCount()`：搜索 / 竖屏 / 高清生效时显示实际结果条数，不再与空态矛盾 |
+| [ImageEditor.ets](file:///e:/zeroone/entry/src/main/ets/common/components/ImageEditor.ets#L1427-L1434) | 工具 chip 字号 13→12、左右内边距 12→10、间距 8→6，6 个 chip 一屏放下 |
+| [ImagePreview.ets](file:///e:/zeroone/entry/src/main/ets/common/components/ImagePreview.ets#L708-L716) | 桌面模拟层时钟左缩进 70，避开左上返回按钮（x14/y32/44×44） |
+| [StickerPage.ets](file:///e:/zeroone/entry/src/main/ets/pages/StickerPage.ets#L1623-L1625) | 空态提示改「点下方「背景」挑选」，消除单字换行 |
+
+### 新增文档
+
+`后端补丁-乱码颜色与搜索数据.md`：坏颜色定位/修复 SQL、`colorsForApp()` 白名单代码、
+标签与标题数据方案（**均未执行，需在服务器操作**）。
+
+### 实测验证（装机逐项截图）
+
+- 颜色 chip 行：`全部 / 蓝 / 青 / 绿 / 黄绿 / 橙黄…`，乱码 chip 消失（共 300 张正常）。
+- 搜索「雪山」：右上角变为「共 0 张」，与「没有匹配的壁纸」一致。
+- 编辑器：6 个 chip 全部一屏可见，无裁切残片。
+- 桌面预览：`4:14 下午` 完整显示，不再被返回按钮遮挡。
+- 贴纸空态：提示单行显示。
+- 构建：`assembleHap` release **BUILD SUCCESSFUL**（43.0s）。
+
+### 仍未解决（数据/后端）
+
+- `/api/v1/colors` 仍返回坏颜色（App 已过滤，其他端仍会看到）。
+- 线上壁纸 tags 全空、标题为「风景-00434087」内部编号 → 搜索与标签筛选实际不可用，
+  需按 `后端补丁-乱码颜色与搜索数据.md` 第四节治理数据。
+
+---
+
+## 2026-10-21：登录后「请再次点击保存」提示 + 文档纠偏
+
+### 背景
+
+交接核对时发现：PRD 4.3 / P0-1 要求「未登录点保存 → 弹登录 → 登录成功后提示再次点击保存」，
+但代码只有 `请先登录后再保存图片` 的 toast，**登录成功后没有任何提示**；而系统 `SaveButton`
+的相册写权限是一次点击一次授权，用户登录回来不点第二次是存不进去的。
+
+### 改动（3 个文件 5 处调用点）
+
+- [AuthManager.ets](file:///e:/zeroone/entry/src/main/ets/common/net/AuthManager.ets)：
+  新增 `pendingSaveHint` 标记 + `requireLoginForSave()`；`login()` 成功后按标记
+  `promptAction.showToast('登录成功，请再次点击保存')`；`hideAuthOverlay()` 清标记
+  （用户放弃登录时不会在下次从「我的」登录时误提示）。
+- 三入口统一改用 `requireLoginForSave()`：
+  [ImagePreview.ets](file:///e:/zeroone/entry/src/main/ets/common/components/ImagePreview.ets)（保存按钮 + `saveToAlbum` 兜底）、
+  [ImageEditor.ets](file:///e:/zeroone/entry/src/main/ets/common/components/ImageEditor.ets)（导出按钮 + `exportAndSave` 兜底）、
+  [StickerPage.ets](file:///e:/zeroone/entry/src/main/ets/pages/StickerPage.ets)（保存按钮 + `save()` 兜底）。
+
+### 文档纠偏
+
+- `CURRENT-STATE.md`：P2「CropGeometry.test.ets 编译失败」标记为**已修复**（实测 `hvigorw test`
+  BUILD SUCCESSFUL 9.2s）；P0 表格补登录提示说明。
+- `PRD.md`：P0-1 状态与 4.3 交互说明补实现方式。
+- `HANDOFF.md`：已知坑 1 补 `requireLoginForSave()` 的兜底说明。
+
+### 验证
+
+- `hvigorw assembleHap --mode module -p product=default -p buildMode=release`：**BUILD SUCCESSFUL**（24.0s）。
+- `hvigorw test`：BUILD SUCCESSFUL（9.2s）。
+- 未做真机/模拟器 UI 实测（当时无设备在线），提示时序需装机确认一次。
 
 ---
 

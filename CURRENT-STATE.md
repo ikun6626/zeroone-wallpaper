@@ -26,6 +26,7 @@
 | 运营 | 内容、合辑、Banner、每日精选全部后台管理；**每天 08:30 前上架 1 张人工精选**并关联 wallpaperId |
 | 壁纸设置 | 鸿蒙三方应用不能直接设置；必须"保存到相册 + 用户去系统图库设置"，文案不得承诺一键设置 |
 | 变更管理 | 所有产品/工程变更写入 Markdown（CURRENT-STATE / PRD / CHANGELOG），支持回档 |
+| **1.4.0 方向（2026-10-25 拍板）** | ① 内容供给：**后台人工补元数据**（真实标题+标签，半自动推断+人工复核；不接第三方图源、不做 UGC）。② 回访闭环四件套全做：**公告+反馈入口、版本更新提示、每日精选推送提醒、桌面服务卡片**。③ **收藏并入账号**：游客可收藏，登录后云同步并合并本地收藏。④ 编辑器/贴纸**守住现状只修不做新**。依据见 CHANGELOG 2026-10-25。**进度：一~三批已实现并部署上线（公告/版本提示/反馈标识/收藏云同步/全库搜索/元数据首轮导入）；App 端待随 1.3.0 发版；第四批（推送+服务卡片）待做** |
 
 ## 二、产品形态（以最新时间为准）
 
@@ -33,8 +34,8 @@
 
 1. **2026-09-12 云端版**：AGC 云数据库 + 云存储，图片存路径、SDK 换临时链接。
 2. **2026-09-13 全离线版**：删除云能力、移除 INTERNET、295 张壁纸随包内置（22.46 MB）。
-   `ARCHITECTURE.md` 与 `DELIVERY.md` 的最后同步仍停在这一版。
-3. **2026-09-30 起的在线版**：`CLOUD-CUTO-REBUILD-PLAN.md` 明确「INTERNET 权限已恢复」，
+   （该时代的 ARCHITECTURE / DELIVERY 等离线版文档已于 2026-10-25 清理，需要时查 git 历史。）
+3. **2026-09-30 起的在线版**：恢复 INTERNET 权限（原 `CLOUD-CUTO-REBUILD-PLAN` 方案，已实施，文档已归档至 git 历史），
    App 接 `www.gqscc.cn` 的 `/api/v1/albums`、`/home/composition`、`/colors`、`/daily/featured`。
    `CHANGELOG` 2026-10-08 记录首页已改用 `/home/composition`。
 
@@ -49,7 +50,7 @@
 |---|---|
 | 技术栈 | NestJS 12 + Prisma 6 + MySQL 8.4 + ali-oss；前端 React/Vite |
 | 部署 | 公网 `https://www.gqscc.cn`，宝塔 nginx 反代 `127.0.0.1:3000`；docker：mysql + backend；法律站点在 `/legal/` |
-| 后台模块 | auth、app、app-auth、app-versions、banners、categories、daily-featured、feedbacks、notices、stats、tags、upload、users、wallpapers、albums |
+| 后台模块 | auth、app、app-auth、app-versions、banners、categories、daily-featured、feedbacks、**favorites（2026-10-25 已部署上线）**、notices、stats、tags、upload、users、wallpapers、albums |
 | 数据模型 | Admin、Category、Tag、Wallpaper、Banner、Notice、Feedback、AppVersion、DailyFeatured、Album、AlbumWallpaper、**User** |
 | 账号体系 | **后端已有 App 用户体系**（`users` 表 + `/api/v1/auth/register|login|refresh|profile`，2026-09-29 已部署）；但 App 端登录入口隐藏 |
 | 内容规模（2026-10-21 实测） | `GET /api/v1/stats` = **1598 张壁纸 / 8 个合辑**；首页编排 8 个合辑，count 分别为 22 / 36 / 300 / 17 / 17 / 405 / 27 / 552 |
@@ -68,37 +69,47 @@
 | 首次启动隐私政策同意弹窗 | 已实现（不同意退出、同意后持久化） | 整改说明 2026-09-15 |
 | 1.1.0 色彩对比度整改 | 已实现，含静态审计脚本 | 整改说明-1.1.0 |
 | 页面转场/边界反馈 | 已按审核建议处理 | 整改说明-1.1.0 |
-| 首页 Cuto 式 Hero + 图库 3 列 | 已实现 | CLOUD-CUTO-REBUILD-PLAN、CHANGELOG 1.2.0 |
-| 贴纸工作台 + 画板二合一 | 已实现，Tab 直达统一编辑器 | 贴纸专区-二合一方案 |
-| 预览「铺满/适应」保存跟随显示 | 已实现（适应=原图，铺满=屏幕比例合成） | 预览保存-跟随显示方式-方案 |
+| 首页 Cuto 式 Hero + 图库 3 列 | 已实现 | CHANGELOG 1.2.0 |
+| 贴纸工作台 + 画板二合一 | 已实现，Tab 直达统一编辑器 | CHANGELOG 2026-10-09 |
+| 预览「铺满/适应」保存跟随显示 | 已实现（适应=原图，铺满=屏幕比例合成） | CHANGELOG 2026-10-15 |
 | 滤镜/纹理强度与花屏修复 | 已实现，逐像素验证 | CHANGELOG 2026-10-09 |
+| 乱码颜色 chip 兜底 | 已实现：`AlbumsApi.isValidColorName()` 丢弃非 1~4 个 CJK 汉字的颜色名；服务端坏数据未修 | CHANGELOG 2026-10-21（下午） |
+| 搜索计数跟随结果 | 已实现：搜索/竖屏/高清生效时右上角显示实际条数 | CHANGELOG 2026-10-21（下午） |
+| 公告（后台发布 → App「我的」入口） | 已实现（App 端）；后台未配公告时入口显示「暂无公告」 | CHANGELOG 2026-10-25 |
+| 版本更新提示 | 已实现并上线：启动检查 + 弹窗（非强制不阻断）；后台已配 harmony/1.2.0/1002000 记录（1.2.0 用户静默，老版本用户收到引导；**1.3.0 过审后改 version_code=1003000**） | CHANGELOG 2026-10-25 |
+| 收藏并入账号 | 已实现并上线：登录时本地收藏上云合并 + 云端拉回并集 + 登录态增量同步；后台 favorites 已部署（2026-10-25 验证：迁移应用、无 token 401） | CHANGELOG 2026-10-25 |
+| 合辑详情全库关键词搜索 | 已实现并上线：服务端 `?keyword=` 防抖搜索跨全部分页页；元数据已导入（1605 行标签），搜「自然风景/日落/猫/每日精选」均有结果 | CHANGELOG 2026-10-25 |
 
 ## 四、当前必须处理的硬问题
 
 | 级别 | 问题 | 依据 |
 |---|---|---|
 | P0 | 隐私政策 URL 仍登记为 `https://gqs.404.kim/`（错站/证书不匹配）；`legal-site` 源与 README 已改为 `https://www.gqscc.cn/legal/`，**待部署并改 AGC 登记** | 整改说明-1.1.0 §5.1 + 2026-10-21 文档更新 |
-| ✅ | **保存登录门槛已实现**：预览保存、编辑器导出、贴纸专区保存三个入口均要求登录；游客仍可浏览与收藏，收藏暂不与账号合并 | PRD v0.3 + 代码 |
-| P0 | 「单机应用/不联网」的备案与隐私表述，与恢复 INTERNET、调用后端接口的现状冲突 | 对比整改说明 与 CLOUD-CUTO-REBUILD-PLAN |
+| ✅ | **保存登录门槛已实现**：预览保存、编辑器导出、贴纸专区保存三个入口均要求登录；游客仍可浏览与收藏，收藏暂不与账号合并。**登录成功后会 toast「登录成功，请再次点击保存」**（`AuthManager.requireLoginForSave()`） | PRD v0.3 + 代码 |
+| P0 | 「单机应用/不联网」的备案与隐私表述，与恢复 INTERNET、调用后端接口的现状冲突 | 对比整改说明-1.1.0 与 CHANGELOG 2026-09-30 |
 | ✅ | 最新一期 Hero（第 22 期）已关联 `wallpaperId=1599`；后台已清空「第 0 期」标题并回填 961×1440 / 267535B / P 朝向 / 主色 / 亮度；App 侧仍保留第 0 期过滤作为兜底 | 2026-10-21 后台数据修复 + 公开接口复核 |
-| P1 | 首页 Hero 依赖后台 `daily` 合辑（`source='daily'`、limitCount≥14），未配置或接口失败时首页为空 | CLOUD-CUTO-REBUILD-PLAN §一 |
+| P1 | ~~内容数据不足以支撑搜索/标签~~ **2026-10-25 首轮治理完成**：全部 1605 张已导入「分类+主色」标签（种子图另有 csv 主题标签），27 条「第 0 期」标题改写；搜索实测有结果。**遗留：402 条内部编号标题（如「什锦-0d6d20f5」）需后续视觉打标优化标题**；`/api/v1/colors` 仍有一条 U+FFFD 坏主色 | 2026-10-21 实机；治理记录见 CHANGELOG 2026-10-25 |
+| P1 | 首页 Hero 依赖后台 `daily` 合辑（`source='daily'`、limitCount≥14），未配置或接口失败时首页为空 | CHANGELOG 2026-09-30 |
 | — | `GET /api/v1/banners` 返回空数组；App 当前**没有 Banner UI**，对用户无影响（后续启用需补空态） | 2026-10-21 公开接口/代码核对 |
 | — | 「升级 Plus」已拍板**不做会员/支付**：需全量核对并删除相关入口、文案与市场材料 | PRD v0.3 |
-| P2 | `CropGeometry.test.ets` 未跟随 `CropView` 新字段，`hvigor test` 编译失败 | 整改说明-1.1.0 §六 |
+| P2 | ~~`CropGeometry.test.ets` 未跟随 `CropView` 新字段，`hvigor test` 编译失败~~ **已修复**：2026-10-21 实测 `hvigorw test` BUILD SUCCESSFUL（9.2s），release `assembleHap` 亦通过 | 2026-10-21 构建实测 |
 | P0（运维） | 后台仓库脚本（如 `check_admin_account.py`）内含明文服务器 root 与数据库口令，`.env` 亦含明文密钥 | 本地后台仓库检查；**凭据必须立即轮换并从脚本中移除** |
 
-## 五、文档状态（为什么之前会出现「落后版本」）
+## 五、文档地图（2026-10-25 清理后）
 
-| 文档 | 描述的时代 | 是否仍可作现状依据 |
-|---|---|---|
-| `ARCHITECTURE.md` | 2026-09-13 全离线 | ❌ 仅作离线归档 |
-| `DELIVERY.md` | 2026-09-13 全离线 | ❌ 仅作离线归档 |
-| `整改说明.md` | 2026-09-15 单机版 | ❌ 历史审核材料 |
-| `整改说明-1.1.0-色彩与动效.md` | 2026-09-29 | ⚠️ 配色/动效有效；单机表述失效 |
-| `CLOUD-CUTO-REBUILD-PLAN.md` | 2026-09-30 | ⚠️ 方向有效，部分已落地 |
-| `贴纸专区-二合一方案与实施记录.md` | 2026-10-09 | ✅ 有效 |
-| `预览保存-跟随显示方式-方案.md` | 2026-10-15 | ✅ 有效 |
-| `App体检报告.md` | 2026-10-15 | ✅ 有效（问题可能部分已修） |
-| `CHANGELOG.md` | 滚动更新 | ✅ 事实日志，但条目之间也存在历史矛盾 |
+> 2026-10-25 已删除停留在历史版本或已完成使命的文档（ARCHITECTURE、DELIVERY、两份 CLOUD 计划、
+> AGC-云数据库接入步骤、RESTRUCTURE-PLAN、贴纸二合一、预览保存方案、App体检报告、整改说明 1.0.0 三件套、
+> docs-site 生成站等），内容均可从 git 历史与 CHANGELOG 找回。
 
-**从本文件建立之日起，以 `CURRENT-STATE.md` 为唯一现状基准。**
+| 想了解什么 | 读哪份文档 |
+|---|---|
+| 项目现状（版本 / 形态 / 后台 / 已知问题） | 本文件（**唯一基准**） |
+| 产品定位与 P0/P1 验收标准 | `PRD.md` |
+| 构建 / 签名 / git 用法、交接与已知坑 | `HANDOFF.md` |
+| 全部工程变更事实 | `CHANGELOG.md`（按时间倒序） |
+| 进行中待办 | `AGC-1.3.0提交清单.md`、`平板端适配待办.md`、`后端补丁-乱码颜色与搜索数据.md`、`USER-AUDIT.md` |
+| 元数据治理流程（标题/标签补齐） | `tools/README.md` + `tools/metadata_draft.csv`（初稿已生成，待人工复核） |
+| 现行配色 / 对比度标准 + AGC 审核凭证 | `整改说明-1.1.0-色彩与动效.md`（+ html/pdf、`contrast-audit-report.txt`） |
+| 上架 / 软著凭证材料 | `软著材料\`、`截图\`、`APP首页截图-含名称.jpg`、`legal-site\`（待部署） |
+
+**产品状态变化时，先更新本文件，再更新 PRD / CHANGELOG。**

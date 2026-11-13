@@ -1,6 +1,8 @@
 import { ApiConfig } from './ApiConfig';
+import { promptAction } from '@kit.ArkUI';
 import { HttpClient, ApiResponse } from './HttpClient';
 import { PreferenceUtil } from '../utils/PreferenceUtil';
+import { FavoriteSync } from './FavoriteSync';
 
 /**
  * 后端登录/注册响应体
@@ -44,6 +46,11 @@ export class AuthManager {
   private refreshToken: string = '';
   /** 刷新中标记，防止并发请求同时触发多次刷新 */
   private refreshing: boolean = false;
+  /**
+   * "保存被登录拦下"标记：登录成功后提示用户再点一次保存。
+   * 系统 SaveButton 的相册写权限是一次点击一次授权，登录无法在同一次点击里接着存。
+   */
+  private pendingSaveHint: boolean = false;
 
   private constructor() {}
 
@@ -106,7 +113,15 @@ export class AuthManager {
         PreferenceUtil.setString(ApiConfig.KEY_USER_ID, String(resp.data.user_id));
       }
       this.publishLoginState();
+      // 收藏并入账号（2026-10-25）：本地收藏批量上云 + 云端收藏拉回合并。
+      // 后台静默执行（fire-and-forget），失败不影响登录与本地收藏。
+      FavoriteSync.onLoginSync();
+      // 本次登录是否由"点保存但未登录"触发：先取标记，hideAuthOverlay 会清掉它
+      const needSaveHint: boolean = this.pendingSaveHint;
       this.hideAuthOverlay();
+      if (needSaveHint) {
+        promptAction.showToast({ message: '登录成功，请再次点击保存' });
+      }
     }
     return resp;
   }
@@ -254,9 +269,24 @@ export class AuthManager {
     AppStorage.setOrCreate<boolean>(ApiConfig.APP_KEY_AUTH_OVERLAY, true);
   }
 
-  /** 关闭登录/注册覆盖层 */
+  /** 关闭登录/注册覆盖层（视为放弃本次操作，清掉"登录后提示再保存"标记） */
   hideAuthOverlay(): void {
+    this.pendingSaveHint = false;
     AppStorage.setOrCreate<boolean>(ApiConfig.APP_KEY_AUTH_OVERLAY, false);
+  }
+
+  /**
+   * 保存流程的登录闸门：未登录则弹登录层，并登记"登录成功后提示再点一次保存"。
+   * 调用方：`if (!AuthManager.getInstance().requireLoginForSave()) { 提示并 return; }`
+   * @returns true=已登录可继续保存；false=已弹登录层，本次保存中止
+   */
+  requireLoginForSave(): boolean {
+    if (this.isLoggedIn()) {
+      return true;
+    }
+    this.pendingSaveHint = true;
+    this.showAuthOverlay();
+    return false;
   }
 
   /**

@@ -4,6 +4,8 @@ import { PreferenceUtil } from '../common/utils/PreferenceUtil';
 import { ImagePreview } from '../common/components/ImagePreview';
 import { LegalDocPage } from '../common/components/LegalDocPage';
 import { AccountPage } from '../common/components/AccountPage';
+import { NoticePage } from '../common/components/NoticePage';
+import { SystemApi, NoticeItem } from '../common/net/SystemApi';
 import { AppInfo } from '../common/utils/AppInfo';
 import { AuthManager } from '../common/net/AuthManager';
 import { AlbumsApi, AppStats } from '../common/net/AlbumsApi';
@@ -15,11 +17,14 @@ import { Haptics } from '../common/utils/Haptics';
 import { promptAction } from '@kit.ArkUI';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { BusinessError } from '@ohos.base';
+import { EditGuard } from '../common/utils/EditGuard';
 
 /** 反馈请求体（POST /api/v1/feedback，ArkTS 要求显式类型） */
 export class FeedbackBody {
   content: string = '';
   contact: string = '';
+  /** 登录用户的数字 id（方便运营在后台跟进；游客为空串） */
+  userId: string = '';
 }
 
 /**
@@ -63,6 +68,15 @@ export struct MinePage {
    */
   @State wallpaperNumText: string = '--';
   @State albumNumText: string = '--';
+  /** 公告覆盖层（2026-10-25 回访闭环） */
+  @State showNotices: boolean = false;
+  /** 公告条数与最新一条标题（入口卡副标题用；拉取失败保持 0/空串 → 显示"暂无公告"） */
+  @State noticeCount: number = 0;
+  @State latestNoticeTitle: string = '';
+  /** 返回键处理在 EditGuard 中的注册 id（-1 = 未注册） */
+  private backId: number = -1;
+  /** 本页当前是否为可见 Tab（切走后不消费返回键，避免在别的 Tab 误关本页子视图） */
+  private pageVisible: boolean = true;
 
   private readonly faqQ: string[] = [
     '如何收藏一张壁纸？',
@@ -80,9 +94,9 @@ export struct MinePage {
     '进入"我的"页面，点击"最爱收藏"即可查看你收藏的全部壁纸。',
     '打开壁纸全屏预览，点击底部工具栏的下载图标，确认后即可保存到系统相册。注意：受 HarmonyOS 系统限制，第三方应用无法直接替换系统壁纸，保存后需你在系统「图库」中手动完成设置。',
     '全屏预览页点击底部工具栏的调色盘图标，可进行旋转、裁剪、滤镜、纹理、文字、贴纸等操作。',
-    '底部点"贴纸"标签即进入贴纸专区：① 选背景（内置壁纸库或相册照片，也可以不选背景，直接导出透明 PNG）；② 从 51 款猫猫/狗狗/兔兔贴纸里挑喜欢的贴上，支持拖动、缩放、旋转、阴影与调色，常用贴纸可点右上角星标收藏；③ 导出时可选存 JPG、透明 PNG，或存为锁屏/桌面壁纸用图。专区还支持撤销/重做与图层管理。本应用不提供自动抠图，如需使用自己的贴纸，请先准备好透明 PNG 再导入。',
+    '底部点"贴纸"标签即进入贴纸专区：① 选背景（内置壁纸库或相册照片，也可以不选背景，直接导出透明 PNG）；② 从 51 款猫猫/狗狗/兔兔贴纸里挑喜欢的贴上，支持拖动、缩放、旋转、阴影与调色，常用贴纸可点右上角星标收藏；③ 导出时可选保存 JPG 或透明 PNG 到系统相册，之后可在系统图库中自行设置壁纸。专区还支持撤销/重做与图层管理。本应用不提供自动抠图，如需使用自己的贴纸，请先准备好透明 PNG 再导入。',
     '不同壁纸的来源分辨率不一，极少数图片全屏放大后可能略显模糊，我们正在持续优化图库质量。',
-    '不需要登录即可使用：浏览、收藏、编辑、贴纸、保存相册全部无需注册。注册账号为可选项，不影响任何核心功能，账号可在「我的 → 账号设置」里随时注销。',
+    '浏览、收藏、编辑、贴纸无需登录；保存到系统相册需要登录。注册账号为可选项，不影响浏览、收藏、编辑、贴纸等核心功能，账号可在「我的 → 账号设置」里随时注销。',
     '部分功能需要联网。壁纸库会优先从云端更新（联网时自动加载最新壁纸），断网时自动使用内置壁纸，不影响使用；收藏、贴纸、编辑等核心功能均可离线使用。',
     '点击下方"提交反馈"会直接发送到我们的反馈后台；网络不可用时，内容会自动复制到剪贴板，请粘贴后发送至 3237145490@qq.com，我们会尽快处理。'
   ];
@@ -90,6 +104,36 @@ export struct MinePage {
   aboutToAppear(): void {
     this.rebuildFavorites();
     this.authUsername = AuthManager.getInstance().getUsername();
+  }
+
+  /**
+   * 打开收藏/帮助/公告子视图时接管返回键
+   *
+   * 这三个子视图都是同一 Tab 内的一级覆盖，此前没有拦截：按返回会直接退出 App。
+   * 只在子视图打开期间注册，关闭即注销，避免常驻处理器影响首页/其他 Tab 的正常退出。
+   */
+  private enterSubPage(): void {
+    if (this.backId < 0) {
+      this.backId = EditGuard.push((): boolean => {
+        // 切到别的 Tab 后不消费：那个 Tab 的返回键应走它自己的逻辑
+        if (!this.pageVisible) {
+          return false;
+        }
+        this.leaveSubPage();
+        return true;
+      });
+    }
+  }
+
+  /** 关闭当前子视图并注销返回键（返回键与页面内返回箭头共用） */
+  private leaveSubPage(): void {
+    if (this.backId >= 0) {
+      EditGuard.pop(this.backId);
+      this.backId = -1;
+    }
+    this.showFavorites = false;
+    this.showHelp = false;
+    this.showNotices = false;
   }
 
   /** 点击"登录/注册"：弹出登录覆盖层（不挡主界面，盖在最上层） */
@@ -200,7 +244,8 @@ export struct MinePage {
   onToggleFavorite(id: string, item: Wallpaper): void {
     // 写入后由 AppStorage 广播触发 onFavoritesChange，无需在此手动刷新；
     // 传 item 让快照同步登记/清理（目录里没有的图取消收藏也能清干净）
-    PreferenceUtil.toggleFavoriteItem(id, item);
+    // 收藏页里的按钮语义固定为「取消收藏」：按目标状态写入，避免列表滞后时 toggle 又把它加回来
+    PreferenceUtil.setFavoriteItem(id, item, false);
   }
 
   /** 拉取云端实时统计（每次本页可见时调用；失败保持「--」，不用本地数误导） */
@@ -210,6 +255,13 @@ export struct MinePage {
       this.wallpaperNumText = `${stats.wallpapers}`;
       this.albumNumText = `${stats.albums}`;
     }
+  }
+
+  /** 拉取公告（入口卡副标题展示最新一条；失败静默，入口仍可点进去看重试） */
+  private async loadNotices(): Promise<void> {
+    const list: NoticeItem[] = await SystemApi.fetchNotices();
+    this.noticeCount = list.length;
+    this.latestNoticeTitle = list.length > 0 ? list[0].title : '';
   }
 
   private toggleFaq(idx: number): void {
@@ -236,6 +288,9 @@ export struct MinePage {
     const body = new FeedbackBody();
     body.content = content;
     body.contact = '3237145490@qq.com';
+    // 登录用户附上 id：后台「反馈管理」能定位到人跟进；游客不传
+    const uid: number = AuthManager.getInstance().getUserId();
+    body.userId = uid > 0 ? String(uid) : '';
     const resp: ApiResponse<object> = await HttpClient.post<object>(ApiConfig.PATH.FEEDBACK, body);
     if (resp.ok) {
       promptAction.showToast({ message: '感谢您的反馈 ❤️ 我们会尽快处理' });
@@ -349,7 +404,7 @@ export struct MinePage {
               .height(40)
               .textAlign(TextAlign.Center)
               .onClick(() => {
-                this.showFavorites = false;
+                this.leaveSubPage();
               })
             Text('最爱收藏')
               .fontSize(18)
@@ -409,7 +464,7 @@ export struct MinePage {
               .height(40)
               .textAlign(TextAlign.Center)
               .onClick(() => {
-                this.showHelp = false;
+                this.leaveSubPage();
               })
             Text('帮助与反馈')
               .fontSize(18)
@@ -558,6 +613,11 @@ export struct MinePage {
         .backgroundColor('#0F0F12')
       } else {
         // ===== 主视图：App 介绍 + 入口（黑） =====
+        // 外层 Scroll：内容高度随屏幕密度变化，在 1080×1920 等小屏上会超过一屏，
+        // 原先直接放 Column 会把「最爱收藏 / 帮助与反馈」挤出屏幕且无法滚动到达。
+        // 顶部账号卡与底部 tab bar 都在 Scroll 之外（tab bar 由 Index 的 Tabs 渲染），
+        // 滚动只影响中间内容区，不会带动底部导航。
+        Scroll() {
         Column() {
           // 账号卡片：未登录显示"登录/注册"，已登录显示用户名 + 登出
           Row({ space: 14 }) {
@@ -574,7 +634,7 @@ export struct MinePage {
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
                 .fontColor('#F2F2F5')
-              Text(this.isLoggedIn ? '已登录' : '无需登录，收藏保存在本机')
+              Text(this.isLoggedIn ? '已登录 · 收藏云端同步' : '无需登录 · 登录后收藏云端同步')
                 .fontSize(12)
                 .fontColor('#A8A8B5')
             }
@@ -642,7 +702,7 @@ export struct MinePage {
             }
             .width('100%')
 
-            Text('ZeroOne 壁纸是一款云端壁纸工具：风景、动物、插画、文字等高清壁纸持续更新，无需登录即可浏览全部。支持一键收藏（仅保存在本机）、全屏预览与保存到相册；底部「贴纸」标签提供 51 款宠物贴纸，可自由拼贴创作，也支持导入你自己的透明 PNG 贴纸。')
+            Text('ZeroOne 壁纸是一款云端壁纸工具：风景、动物、插画、文字等高清壁纸持续更新，无需登录即可浏览全部。支持一键收藏（登录后云端同步、换机不丢）、全屏预览与保存到相册；底部「贴纸」标签提供 51 款宠物贴纸，可自由拼贴创作，也支持导入你自己的透明 PNG 贴纸。')
               .fontSize(13)
               .fontColor('#A8A8B5')
               .lineHeight(20)
@@ -660,6 +720,52 @@ export struct MinePage {
           .padding(18)
           .backgroundColor('#1C1D22')
           .borderRadius(18)
+
+          // 公告入口（2026-10-25 回访闭环：后台「公告管理」发布，这里展示最新一条）
+          Row({ space: 14 }) {
+            Stack() {
+              Circle({ width: 42, height: 42 })
+                .fill('#3A2A26')
+              Text('📣')
+                .fontSize(20)
+            }
+            Column({ space: 3 }) {
+              Text('公告')
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#F2F2F5')
+              Text(this.noticeCount > 0
+                ? `${this.latestNoticeTitle}${this.noticeCount > 1 ? ` 等 ${this.noticeCount} 条` : ''}`
+                : '暂无公告')
+                .fontSize(12)
+                .fontColor(this.noticeCount > 0 ? '#E8E8EE' : '#A8A8B5')
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+            if (this.noticeCount > 0) {
+              Text(`${this.noticeCount}`)
+                .fontSize(12)
+                .fontColor('#FFFFFF')
+                .backgroundColor('#C9333D')
+                .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+                .borderRadius(12)
+            }
+            Text('›')
+              .fontSize(24)
+              .fontColor('#A8A8B5')
+          }
+          .width('100%')
+          .padding(16)
+          .backgroundColor('#1C1D22')
+          .borderRadius(18)
+          .margin({ top: 14 })
+          .onClick(() => {
+            Haptics.light();
+            this.showNotices = true;
+            this.enterSubPage();
+          })
 
           // 最爱收藏入口
           Row({ space: 14 }) {
@@ -698,6 +804,7 @@ export struct MinePage {
           .margin({ top: 14 })
           .onClick(() => {
             this.showFavorites = true;
+            this.enterSubPage();
           })
 
           // 帮助与反馈入口
@@ -730,6 +837,7 @@ export struct MinePage {
           .margin({ top: 14 })
           .onClick(() => {
             this.showHelp = true;
+            this.enterSubPage();
           })
 
           // 隐私政策 / 用户协议 / 关于（上架审核硬性要求：这些内容必须可达）
@@ -764,12 +872,18 @@ export struct MinePage {
             this.showLegal = true;
           })
 
+          // 底部留白：滚到最底时最后一个入口不贴住 tab bar
           Blank()
+            .height(8)
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 20, bottom: 20 })
+        .backgroundColor('#0F0F12')
         }
         .width('100%')
         .height('100%')
-        .padding({ left: 16, right: 16, top: 20, bottom: 20 })
-        .backgroundColor('#0F0F12')
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
 
       // ===== 全屏预览 =====
@@ -784,6 +898,15 @@ export struct MinePage {
           }
         })
       }
+      // ===== 公告列表（后台「公告管理」维护） =====
+      if (this.showNotices) {
+        NoticePage({
+          onClose: () => {
+            this.leaveSubPage();
+          }
+        })
+      }
+
       // ===== 法律与关于（隐私政策/用户协议/关于与版权） =====
       if (this.showLegal) {
         LegalDocPage({
@@ -806,12 +929,15 @@ export struct MinePage {
     .width('100%')
     .height('100%')
     .onVisibleAreaChange([0.0], (isVisible: boolean, ratio: number): void => {
+      // 记录本 Tab 是否可见：子视图的返回键处理只在可见时消费
+      this.pageVisible = ratio > 0.5;
       // 进入「我的」tab 即刷新云端统计（后台上图后数字实时更新）
       if (isVisible) {
         // 本 Tab 在后台时被框架冻结，@Watch 不投递（目录/收藏的变更收不到），
         // 变为可见时必须主动重同步，否则「最爱收藏」是旧数据甚至空白
         this.rebuildFavorites();
         this.loadCloudStats();
+        this.loadNotices();
       }
     })
   }

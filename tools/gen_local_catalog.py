@@ -24,6 +24,23 @@ CSV_IN = os.path.join(ROOT, "assets-local", "base-51.csv")
 BATCH_DIR = os.path.join(ROOT, "assets-local", "batches")
 OUT_ETS = os.path.join(ROOT, "entry", "src", "main", "ets", "common", "constants", "LocalWallpapers.ets")
 
+# 旧素材的分类名与后台合并后的口径对齐（只作用于 base-51 / 既有批次，不改新批次原始类目）
+CATEGORY_ALIASES = {
+    "风景": "自然风景",
+    "自然风光": "自然风景",
+}
+
+# 已确认淘汰的重复图 → 保留图（2026-11-07 本地 3 组）。
+# 生成时从目录剔除淘汰 id，并在资源查找处做别名解析，保证旧收藏 id 仍能出图。
+DEDUP_ALIASES = {
+    "jofy88_fall_1051300_1920_1": "jofy88_fall_1051300",
+    "w1462_1c7d482e29": "w1546_07bfd74f9c",
+    "w2004_160101601b": "w3474_28910b7791",
+}
+
+# 类别顺序：既有 4 类在前（保持原展示顺序），批次新增类目按名称稳定追加
+BASE_CATEGORIES = ["自然风景", "城市建筑", "极简风格", "动物萌宠"]
+
 # 个人宠物照片：纯本地资源（media 下 custom_cat_XX / custom_dog_XX），无网络地址
 # 格式：(id, 标题, 分类, 上传时间, 标签, 资源名)
 LEGACY_PERSONAL = [
@@ -42,7 +59,7 @@ LEGACY_PERSONAL = [
 ]
 
 # 只保留实际有图的分类；「极简风格」「二次元插画」随占位图一起删除（0 张会变空标签）
-CATEGORIES = "['全部', '风景', '自然风光', '城市建筑', '极简风格', '动物萌宠']"
+CATEGORIES = "['全部', '自然风景', '城市建筑', '极简风格', '动物萌宠']"
 
 PRESET_TAGS = """[
     '星空', '科幻太空', '暗色', '治愈', '清新', '赛博朋克', '国风',
@@ -59,12 +76,13 @@ def read_new():
     with open(CSV_IN, "r", encoding="utf-8-sig", newline="") as f:
         for r in csv.DictReader(f):
             if r.get("id"):
+                r["category"] = CATEGORY_ALIASES.get(r["category"], r["category"])
                 rows.append(r)
     return rows
 
 
 def read_batches():
-    """读取 assets-local/batches/*.csv —— 由 tools/add_local_batch.py 产出"""
+    """读取 assets-local/batches/*.csv —— 由 tools/add_local_batch.py / 导入脚本产出"""
     rows = []
     if not os.path.isdir(BATCH_DIR):
         return rows
@@ -73,8 +91,12 @@ def read_batches():
             continue
         with open(os.path.join(BATCH_DIR, name), "r", encoding="utf-8-sig", newline="") as f:
             for r in csv.DictReader(f):
-                if r.get("id"):
-                    rows.append(r)
+                if not r.get("id"):
+                    continue
+                # 11.3 新批次直接使用 WorkBuddy 原始 category，不做类目重写
+                if not name.lower().startswith("w113"):
+                    r["category"] = CATEGORY_ALIASES.get(r["category"], r["category"])
+                rows.append(r)
     return rows
 
 
@@ -84,6 +106,22 @@ def main():
     legacy = LEGACY_PERSONAL
     all_photo = new + batches
 
+    # 淘汰的重复图不再进入目录（源 CSV 已移除；此处再做一次兜底剔除）
+    dropped = [r["id"] for r in all_photo if r["id"] in DEDUP_ALIASES]
+    if dropped:
+        print("  [跳过] 已淘汰的重复图: %s" % ", ".join(dropped))
+    all_photo = [r for r in all_photo if r["id"] not in DEDUP_ALIASES]
+
+    # 分类由实际条目稳定生成：既有 4 类在前，批次新增类目按名称追加
+    cats = list(BASE_CATEGORIES)
+    for r in all_photo:
+        if r["category"] not in cats:
+            cats.append(r["category"])
+    categories = "[" + ", ".join("'%s'" % esc(c) for c in ["全部"] + cats) + "]"
+
+    alias_items = list(DEDUP_ALIASES.items())
+    alias_str = "{" + ", ".join("'%s': '%s'" % (esc(a), esc(b)) for a, b in alias_items) + "}"
+
     out = []
     out.append("import { Wallpaper } from '../../model/Wallpaper';")
     out.append("")
@@ -91,7 +129,7 @@ def main():
     out.append(" * LocalWallpapers —— 壁纸目录（全离线，不依赖任何网络与云服务）")
     out.append(" *")
     out.append(" * 由 tools/gen_local_catalog.py 生成，请勿手改：")
-    out.append(" *   %d 条真实素材来自 assets-out/wallpapers-import.csv 与 assets-local/batches/*.csv" % len(all_photo))
+    out.append(" *   %d 条真实素材来自 assets-local/base-51.csv 与 assets-local/batches/*.csv" % len(all_photo))
     out.append(" *   %d 条个人宠物照片为纯本地资源（custom_cat_XX / custom_dog_XX）" % len(legacy))
     out.append(" *")
     out.append(" * 图片资源：resources/base/media/ 下")
@@ -102,8 +140,11 @@ def main():
     out.append(" *    不是真实壁纸，已删除。")
     out.append(" */")
     out.append("export class LocalWallpapers {")
-    out.append("  /** 核心分类（全部 = 不过滤） */")
-    out.append("  static readonly CATEGORIES: string[] = %s;" % CATEGORIES)
+    out.append("  /** 核心分类（全部 = 不过滤；由实际条目生成，新增类目可直接浏览） */")
+    out.append("  static readonly CATEGORIES: string[] = %s;" % categories)
+    out.append("")
+    out.append("  /** 已淘汰重复图的 id → 保留图 id（getLocalImg/getThumb 会解析） */")
+    out.append("  static readonly DEDUP_ALIASES: Record<string, string> = %s;" % alias_str)
     out.append("")
     out.append("  /** 预置标签表 */")
     out.append("  static readonly PRESET_TAGS: string[] = %s;" % PRESET_TAGS)
@@ -138,9 +179,16 @@ def main():
         out.append("    '%s': 'wp_%s_thumb'," % (wid, wid))
     out.append("  };")
     out.append("")
+    out.append("  /** 解析重复图别名：淘汰 id 一律回落到保留 id */")
+    out.append("  static resolveId(id: string): string {")
+    out.append("    const keep: string | undefined = LocalWallpapers.DEDUP_ALIASES[id];")
+    out.append("    return keep === undefined ? id : keep;")
+    out.append("  }")
+    out.append("")
     out.append("  /** 详情用图（列表外的场景：预览、编辑器、设为壁纸） */")
     out.append("  static getLocalImg(id: string): Resource | undefined {")
-    out.append("    const name: string | undefined = LocalWallpapers.LOCAL_IMG[id];")
+    out.append("    const resolved: string = LocalWallpapers.resolveId(id);")
+    out.append("    const name: string | undefined = LocalWallpapers.LOCAL_IMG[resolved];")
     out.append("    if (name === undefined || name.length === 0) {")
     out.append("      return undefined;")
     out.append("    }")
@@ -149,11 +197,12 @@ def main():
     out.append("")
     out.append("  /** 列表用缩略图（省内存：1440 的原图解码成本高） */")
     out.append("  static getThumb(id: string): Resource | undefined {")
-    out.append("    const name: string | undefined = LocalWallpapers.LOCAL_THUMB[id];")
+    out.append("    const resolved: string = LocalWallpapers.resolveId(id);")
+    out.append("    const name: string | undefined = LocalWallpapers.LOCAL_THUMB[resolved];")
     out.append("    if (name !== undefined && name.length > 0) {")
     out.append("      return $r(`app.media.${name}`);")
     out.append("    }")
-    out.append("    return LocalWallpapers.getLocalImg(id);")
+    out.append("    return LocalWallpapers.getLocalImg(resolved);")
     out.append("  }")
     out.append("}")
     out.append("")
@@ -163,6 +212,7 @@ def main():
 
     print("已生成: %s" % OUT_ETS)
     print("  真实素材: %d 条（原始 %d + 批次 %d）" % (len(all_photo), len(new), len(batches)))
+    print("  类目: %s" % " / ".join(cats))
     print("  个人照片: %d 条" % len(legacy))
     print("  合计壁纸: %d 条" % (len(all_photo) + len(legacy)))
     return 0
