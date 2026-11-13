@@ -68,3 +68,13 @@
 
 # AGC 云端配置（含 api_key / client_secret / 应用鉴权校验码，绝不入库）
 agconnect-services.json
+
+# ===== 素材不入库（体积原因，见 README「关于壁纸素材」）=====
+# 本机保留完整素材可正常编译；仓库仅保留 16 张展示图
+/entry/src/main/resources/base/media/
+/entry/src/main/resources/rawfile/
+/截图/
+/docs/mockup-assets/
+/docs/上架素材/
+/docs/效果展示-*.png
+/docs/dedup-quarantine/
