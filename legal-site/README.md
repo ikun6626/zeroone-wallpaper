@@ -9,7 +9,6 @@
 | `index.html` | 隐私政策（AGC 后台填这个） | `https://www.gqscc.cn/legal/` |
 | `terms.html` | 用户协议 | `https://www.gqscc.cn/legal/terms.html` |
 | `about.html` | 关于与版权 / 图片来源 | `https://www.gqscc.cn/legal/about.html` |
-| `self-check.html` | 审核自查说明（测试账号、流程、权限） | `https://www.gqscc.cn/legal/self-check.html` |
 | `style.css` | 样式（纯静态，与 App 配色一致） | — |
 
 页面为纯静态：无 JS、无 Cookie、无外部字体、无第三方统计。
