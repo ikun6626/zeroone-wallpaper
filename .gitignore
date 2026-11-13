@@ -52,3 +52,16 @@
 
 # 本机私有配置（含签名材料路径与口令，绝不入库）
 /.local/
+
+# ===== 公开仓库不纳入：含凭据 / 个人信息 / 内部申报与运维材料 =====
+# 这些文件只保留在本机 .local/private/ 下，禁止再次提交
+/docs/隐私政策核对与改写草案-2026-11-07.md
+/docs/上架材料-2026-11-07.md
+/docs/提交备忘-2026-11-07.md
+/docs/验收与发布检查-2026-11-07.md
+/legal-site/self-check.html
+/legal-site/self-check.docx
+/legal-site/gen_self_check.py
+/软著材料/
+/AGC-1.3.0提交清单.md
+/HANDOFF.md
