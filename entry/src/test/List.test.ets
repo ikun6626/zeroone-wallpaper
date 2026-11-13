@@ -5,6 +5,7 @@ import canvasPresetsTest from './CanvasPresets.test';
 import layerStoreTest from './LayerStore.test';
 import canvasStateTest from './CanvasState.test';
 import filterPipelineTest from './FilterPipeline.test';
+import homeRulesTest from './HomeRules.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -14,4 +15,5 @@ export default function testsuite() {
   layerStoreTest();
   canvasStateTest();
   filterPipelineTest();
+  homeRulesTest();
 }

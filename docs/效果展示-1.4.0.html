@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>ZeroOne 1.4.0 · 首页结构与满宽规则</title>
+<style>
+  :root{
+    --page:#f2f2f3; --ink:#15161a; --muted:#6b6c74; --line:#dcdce1;
+    --frame:#0e0f12; --surface:#1b1c21;
+    --text:#f2f2f5; --text2:#9c9ca8; --accent:#d2454f; --gold:#e7c27a;
+  }
+  *{box-sizing:border-box; -webkit-font-smoothing:antialiased;}
+  body{margin:0; background:var(--page); color:var(--ink);
+       font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;}
+  .page{width:470px; padding:26px 40px 30px; margin:0 auto;}
+  h1{font-size:20px; margin:5px 0 5px; font-weight:600;}
+  .kicker{font-size:10px; letter-spacing:.14em; color:var(--muted);}
+  .sub{font-size:11px; color:var(--muted); margin:0; line-height:1.6;}
+  .stamp{display:inline-block; margin-top:9px; font-size:9.5px; color:#a3262f;
+         border:1px solid #d9a3a7; background:#fbeff0; padding:4px 8px; border-radius:4px;}
+  .phone{width:390px; background:var(--frame); border:1px solid #26272d; border-radius:26px;
+         overflow:hidden; position:relative; box-shadow:0 16px 36px rgba(20,22,28,.13);}
+  .screen{position:relative; overflow:hidden; color:var(--text);}
+  .vhead{display:flex; align-items:baseline; gap:8px; margin:22px 0 9px;}
+  .vhead b{font-size:13px;}
+  .vhead span{font-size:9.5px; color:var(--muted);}
+  .vcap{font-size:10px; line-height:1.6; color:var(--muted); margin:10px 0 0;}
+  .vcap b{color:#1b1c20; font-weight:600;}
+
+  .status{height:24px; display:flex; justify-content:space-between; padding:0 16px;
+          align-items:center; font-size:10px; color:#d6d6de;}
+  .topbar{display:flex; align-items:center; padding:6px 16px 8px;}
+  .logo{font-size:17px; font-weight:600;}
+  .searchrow{display:flex; align-items:center; gap:8px; padding:0 16px;}
+  .search{flex:1; height:34px; background:var(--surface); border:1px solid #2b2c33; border-radius:17px;
+          display:flex; align-items:center; gap:7px; padding:0 12px; font-size:11px; color:#8f909b;}
+  .num{display:inline-flex; width:15px; height:15px; align-items:center; justify-content:center;
+       background:var(--gold); color:#2a210f; border-radius:50%; font-size:9px; font-weight:600; flex:0 0 15px;}
+  .sechead{display:flex; align-items:center; gap:7px; padding:14px 16px 8px;}
+  .sechead span{font-size:13px; font-weight:600;}
+  .pill{font-size:9px; color:#c5c5cf; background:#24252b; border-radius:8px; padding:2px 7px;}
+  .sechead em{font-size:10px; color:var(--text2); font-style:normal; margin-left:auto;}
+  .grid16{display:grid; gap:10px; padding:0 16px;}
+  .g2{grid-template-columns:1fr 1fr;}
+  .g4{grid-template-columns:repeat(4,1fr);}
+  .tile{position:relative; border-radius:14px; overflow:hidden; background:#222; aspect-ratio:3/4;}
+  .tile img{width:100%; height:100%; object-fit:cover; display:block;}
+  .b{position:absolute; display:flex; align-items:center; gap:3px; font-size:9.5px; color:#fff;
+     background:rgba(0,0,0,.44); border-radius:10px; padding:2px 6px;}
+  .b.tl{left:8px; top:8px;}
+  .b.br{right:8px; bottom:8px;}
+  .b .ic{font-size:9px; opacity:.92;}
+
+  .sep{margin:16px 16px 0; padding-top:13px; border-top:1px solid #2b2c33;}
+  .sephead{display:flex; align-items:center; gap:7px;}
+  .sephead span{font-size:13px; font-weight:600;}
+  .pending{font-size:8.5px; color:#d8b46f; border:1px dashed #6b5836; border-radius:7px; padding:2px 6px;}
+  .sorthint{font-size:8.5px; color:#8a8b96; margin-top:5px; line-height:1.5;}
+  .feed{display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:10px 16px 0;}
+  .fwide{grid-column:1/-1; position:relative; border-radius:14px; overflow:hidden; background:#222;}
+  .fwide img{width:100%; height:100%; object-fit:cover; display:block;}
+  .fnote{font-size:8.5px; color:#8a8b96; margin:5px 2px 0; line-height:1.5;}
+  .fcard{position:relative; border-radius:14px; overflow:hidden; background:#222; height:174px;}
+  .fcard img{width:100%; height:100%; object-fit:cover; display:block;}
+
+  .fold{position:absolute; left:0; right:0; border-top:1px dashed #a9aab4; pointer-events:none; z-index:5;}
+  .fold span{position:absolute; right:10px; top:-15px; font-size:8px; color:#e7c27a;
+             background:#1a1b20; border:1px solid #4a3f2a; padding:1px 5px; border-radius:4px;}
+  .toolbar::after{content:''; position:absolute; left:50%; top:6px; bottom:6px;
+             border-left:1px dashed rgba(231,194,122,.55);}
+
+  .screens{width:1290px; padding:26px 40px 30px; margin:0 auto;}
+  .row{display:flex; gap:28px;}
+  .frame{width:390px;}
+  .pspec{background:#141519; border-top:1px solid #26272d; padding:10px 14px; height:94px;}
+  .pspec div{font-size:9px; color:#75767f; letter-spacing:.12em; margin-bottom:6px;}
+  .pspec p{margin:0 0 5px; font-size:10.5px; line-height:1.45; color:#c9c9d2; display:flex; gap:6px;}
+  .pspec b{display:inline-flex; width:14px; height:14px; flex:0 0 14px; align-items:center; justify-content:center;
+           background:var(--gold); color:#2a210f; border-radius:50%; font-size:9px; font-weight:600;}
+  .detail-head{display:flex; align-items:center; gap:10px; padding:4px 14px 8px;}
+  .back{font-size:17px; color:#cfcfd8; width:20px;}
+  .detail-title{font-size:15px; font-weight:600;}
+  .detail-meta{font-size:10px; color:var(--text2); margin-left:auto; margin-right:6px;}
+  .chips{display:flex; gap:6px; padding:2px 14px 10px;}
+  .chip{font-size:10px; padding:3px 9px; border-radius:9px; background:var(--surface); color:#b8b8c3;}
+  .chip.on{background:#3a2226; color:#f0b9bd; border:1px solid #5a2f35;}
+  .wf{display:flex; gap:10px; padding:0 14px;}
+  .wf .col{flex:1; display:flex; flex-direction:column; gap:10px;}
+  .card{position:relative; border-radius:16px; overflow:hidden; background:#222;}
+  .card img{width:100%; height:100%; object-fit:cover; display:block;}
+
+  .preview .bg{position:absolute; inset:0;}
+  .preview .bg img{width:100%; height:100%; object-fit:cover;}
+  .preview .shade{position:absolute; inset:0;
+     background:linear-gradient(180deg,rgba(0,0,0,.38) 0,rgba(0,0,0,0) 90px, rgba(0,0,0,0) 62%, rgba(0,0,0,.55) 100%);}
+  .pv-top{position:absolute; left:0; right:0; top:24px; display:flex; align-items:center; padding:8px 16px;}
+  .pv-top .num{margin-left:auto;}
+  .pv-badges .b.tl{left:16px; top:96px;}
+  .pv-badges .b.br{right:16px; bottom:168px;}
+  .toast{position:absolute; left:50%; transform:translateX(-50%); bottom:104px;
+     background:rgba(24,24,28,.92); border:1px solid #34353c; color:#e9e9ef;
+     font-size:10.5px; padding:8px 12px; border-radius:11px; white-space:nowrap;}
+  .toolbar{position:absolute; left:0; right:0; bottom:0; height:76px;
+     display:flex; align-items:center; justify-content:center; gap:56px; padding:0 24px;
+     background:rgba(14,15,18,.88); border-top:1px solid #26272d;}
+  .toolbar .num{position:absolute; left:16px; top:12px;}
+  .tool{display:flex; flex-direction:column; align-items:center; gap:3px; font-size:8.5px; color:#b9b9c4;}
+  .tool .ic{font-size:17px; line-height:1;}
+  .tool.on{color:#f3a7ac;}
+
+  .searchpage .sfield{display:flex; align-items:center; margin:4px 14px 0;}
+  .sfield .box{flex:1; height:34px; background:var(--surface); border:1px solid #2b2c33; border-radius:17px;
+     display:flex; align-items:center; padding:0 11px; font-size:11.5px; color:#ececf2;}
+  .sfield .x{font-size:11px; color:#8d8e99;}
+  .resmeta{display:flex; align-items:center; gap:6px; padding:14px 16px 8px; font-size:10px; color:var(--text2);}
+  .resmeta b{color:#ececf2; font-weight:500; font-size:10.5px;}
+  .rg{display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:0 14px;}
+
+  body[data-only="homeA"] #homeB,
+  body[data-only="homeA"] #screens,
+  body[data-only="homeB"] #homeA,
+  body[data-only="homeB"] #screens,
+  body[data-only="screens"] #homeA,
+  body[data-only="screens"] #homeB{display:none;}
+  body[data-only="screens"] .page{width:auto;}
+</style>
+</head>
+<body data-only="all">
+<div class="page">
+  <div class="kicker">ZEROONE · WALLPAPER APP · 1.4.0</div>
+  <h1>首页结构 · 精选 16 图 + 推荐流</h1>
+  <p class="sub">按正式执行版绘制；横图满宽规则已写入方案第 5A 节。视觉示意，不是最终成品。</p>
+  <span class="stamp">视觉示意 · 非最终成品</span>
+</div>
+
+<!-- A：精选 2 列 -->
+<div id="homeA">
+  <div class="page">
+    <div class="vhead"><b>A · 精选 2 列</b><span>16 张约 2.4 屏；推荐流在折叠线下方较远</span></div>
+    <div class="phone">
+      <div class="screen" style="height:3430px">
+        <div class="status"><span>9:41</span><span>▮▮ 5G</span></div>
+        <div class="topbar"><div class="logo">ZeroOne</div></div>
+        <div class="searchrow"><div class="search"><span>⌕</span> 搜索壁纸、主题</div><span class="num">5</span></div>
+        <div class="sechead"><span>精选</span><span class="pill">16 张</span><em>换一批 ↻</em><span class="num">6</span></div>
+        <div class="grid16 g2">
+          <div class="tile"><img src="mockup-assets/w1.jpg"><div class="b tl"><span class="ic">◉</span>1.2K</div><div class="b br"><span class="ic">↓</span>42</div></div>
+          <div class="tile"><img src="mockup-assets/w4.jpg"><div class="b tl"><span class="ic">◉</span>986</div><div class="b br"><span class="ic">↓</span>21</div></div>
+          <div class="tile"><img src="mockup-assets/w8.jpg"><div class="b tl"><span class="ic">◉</span>742</div><div class="b br"><span class="ic">↓</span>9</div></div>
+          <div class="tile"><img src="mockup-assets/w9.jpg"><div class="b tl"><span class="ic">◉</span>2.1K</div><div class="b br"><span class="ic">↓</span>38</div></div>
+          <div class="tile"><img src="mockup-assets/w6.jpg"><div class="b tl"><span class="ic">◉</span>386</div><div class="b br"><span class="ic">↓</span>12</div></div>
+          <div class="tile"><img src="mockup-assets/w5.jpg"><div class="b tl"><span class="ic">◉</span>1.5K</div><div class="b br"><span class="ic">↓</span>26</div></div>
+          <div class="tile"><img src="mockup-assets/w2.jpg"><div class="b tl"><span class="ic">◉</span>634</div></div>
+          <div class="tile"><img src="mockup-assets/w10.jpg"><div class="b br"><span class="ic">↓</span>15</div></div>
+          <div class="tile"><img src="mockup-assets/w3.jpg"><div class="b tl"><span class="ic">◉</span>412</div></div>
+          <div class="tile"><img src="mockup-assets/w7.jpg"><div class="b tl"><span class="ic">◉</span>1.1K</div><div class="b br"><span class="ic">↓</span>17</div></div>
+          <div class="tile"><img src="mockup-assets/w15.jpg"><div class="b tl"><span class="ic">◉</span>298</div><div class="b br"><span class="ic">↓</span>6</div></div>
+          <div class="tile"><img src="mockup-assets/w12.jpg"><div class="b tl"><span class="ic">◉</span>3.4K</div><div class="b br"><span class="ic">↓</span>61</div></div>
+          <div class="tile"><img src="mockup-assets/w14.jpg"><div class="b tl"><span class="ic">◉</span>531</div><div class="b br"><span class="ic">↓</span>13</div></div>
+          <div class="tile"><img src="mockup-assets/w13.jpg"><div class="b tl"><span class="ic">◉</span>87</div></div>
+          <div class="tile"><img src="mockup-assets/w16.jpg"><div class="b tl"><span class="ic">◉</span>1.8K</div><div class="b br"><span class="ic">↓</span>33</div></div>
+          <div class="tile"><img src="mockup-assets/w17.jpg"><div class="b tl"><span class="ic">◉</span>645</div><div class="b br"><span class="ic">↓</span>11</div></div>
+        </div>
+        <div class="sep">
+          <div class="sephead"><span>推荐</span><span class="pending">排序口径待定</span><span class="num">7</span></div>
+          <div class="sorthint">待定：浏览量最高 / 风格多样性轮播 / 画质优先</div>
+        </div>
+        <div class="feed">
+          <div class="fwide" style="aspect-ratio:1080/720">
+            <img src="mockup-assets/w3.jpg">
+            <div class="b tl"><span class="ic">◉</span>986</div><div class="b br"><span class="ic">↓</span>21</div>
+          </div>
+        </div>
+        <div class="fnote">满宽 1/2：aspect 1.50 ≥ 1.3；高度 = 卡片宽 ÷ 1.50，不设固定高</div>
+        <div class="feed">
+          <div class="fcard"><img src="mockup-assets/w2.jpg"><div class="b tl"><span class="ic">◉</span>386</div><div class="b br"><span class="ic">↓</span>12</div></div>
+          <div class="fcard"><img src="mockup-assets/w6.jpg"><div class="b tl"><span class="ic">◉</span>1.2K</div><div class="b br"><span class="ic">↓</span>29</div></div>
+          <div class="fcard"><img src="mockup-assets/w1.jpg"><div class="b tl"><span class="ic">◉</span>2.4K</div><div class="b br"><span class="ic">↓</span>48</div></div>
+          <div class="fcard"><img src="mockup-assets/w10.jpg"><div class="b tl"><span class="ic">◉</span>742</div></div>
+          <div class="fcard"><img src="mockup-assets/w5.jpg"><div class="b tl"><span class="ic">◉</span>1.5K</div><div class="b br"><span class="ic">↓</span>26</div></div>
+          <div class="fcard"><img src="mockup-assets/w12.jpg"><div class="b tl"><span class="ic">◉</span>3.4K</div><div class="b br"><span class="ic">↓</span>61</div></div>
+          <div class="fcard"><img src="mockup-assets/w7.jpg"><div class="b tl"><span class="ic">◉</span>1.1K</div><div class="b br"><span class="ic">↓</span>17</div></div>
+          <div class="fcard"><img src="mockup-assets/w13.jpg"><div class="b tl"><span class="ic">◉</span>87</div></div>
+        </div>
+        <div class="feed">
+          <div class="fwide" style="aspect-ratio:1440/810">
+            <img src="mockup-assets/w14.jpg">
+            <div class="b tl"><span class="ic">◉</span>531</div><div class="b br"><span class="ic">↓</span>13</div>
+          </div>
+        </div>
+        <div class="fnote">满宽 2/2：与上一张相隔 8 张普通卡（≥7），不连续；角标位置不变</div>
+        <div class="fold" style="top:844px"></div>
+      </div>
+    </div>
+    <div class="vcap"><b>⑥</b> 精选 16 张：2 列 × 8 行，等宽等距，不带满宽（会破坏网格）。虚线 = 首屏折叠 844，16 张约占 2.4 屏。<br>
+      <b>⑦</b> 推荐流双列；横图 aspect ≥1.3 满宽，满宽后至少隔 7 张普通卡；排序口径待定。</div>
+  </div>
+</div>
+
+<!-- B：精选 4 列 -->
+<div id="homeB">
+  <div class="page">
+    <div class="vhead"><b>B · 精选 4 列</b><span>16 张一屏放完；推荐流紧跟其后</span></div>
+    <div class="phone">
+      <div class="screen" style="height:1690px">
+        <div class="status"><span>9:41</span><span>▮▮ 5G</span></div>
+        <div class="topbar"><div class="logo">ZeroOne</div></div>
+        <div class="searchrow"><div class="search"><span>⌕</span> 搜索壁纸、主题</div><span class="num">5</span></div>
+        <div class="sechead"><span>精选</span><span class="pill">16 张</span><em>换一批 ↻</em><span class="num">6</span></div>
+        <div class="grid16 g4">
+          <div class="tile"><img src="mockup-assets/w1.jpg"><div class="b tl"><span class="ic">◉</span>1.2K</div></div>
+          <div class="tile"><img src="mockup-assets/w4.jpg"><div class="b tl"><span class="ic">◉</span>986</div></div>
+          <div class="tile"><img src="mockup-assets/w8.jpg"><div class="b tl"><span class="ic">◉</span>742</div></div>
+          <div class="tile"><img src="mockup-assets/w9.jpg"><div class="b tl"><span class="ic">◉</span>2.1K</div></div>
+          <div class="tile"><img src="mockup-assets/w6.jpg"><div class="b tl"><span class="ic">◉</span>386</div></div>
+          <div class="tile"><img src="mockup-assets/w5.jpg"><div class="b tl"><span class="ic">◉</span>1.5K</div></div>
+          <div class="tile"><img src="mockup-assets/w2.jpg"><div class="b tl"><span class="ic">◉</span>634</div></div>
+          <div class="tile"><img src="mockup-assets/w10.jpg"></div>
+          <div class="tile"><img src="mockup-assets/w3.jpg"><div class="b tl"><span class="ic">◉</span>412</div></div>
+          <div class="tile"><img src="mockup-assets/w7.jpg"><div class="b tl"><span class="ic">◉</span>1.1K</div></div>
+          <div class="tile"><img src="mockup-assets/w15.jpg"><div class="b tl"><span class="ic">◉</span>298</div></div>
+          <div class="tile"><img src="mockup-assets/w12.jpg"><div class="b tl"><span class="ic">◉</span>3.4K</div></div>
+          <div class="tile"><img src="mockup-assets/w14.jpg"><div class="b tl"><span class="ic">◉</span>531</div></div>
+          <div class="tile"><img src="mockup-assets/w13.jpg"><div class="b tl"><span class="ic">◉</span>87</div></div>
+          <div class="tile"><img src="mockup-assets/w16.jpg"><div class="b tl"><span class="ic">◉</span>1.8K</div></div>
+          <div class="tile"><img src="mockup-assets/w17.jpg"><div class="b tl"><span class="ic">◉</span>645</div></div>
+        </div>
+        <div class="sep">
+          <div class="sephead"><span>推荐</span><span class="pending">排序口径待定</span><span class="num">7</span></div>
+          <div class="sorthint">待定：浏览量最高 / 风格多样性轮播 / 画质优先</div>
+        </div>
+        <div class="feed">
+          <div class="fwide" style="aspect-ratio:1440/810">
+            <img src="mockup-assets/w14.jpg">
+            <div class="b tl"><span class="ic">◉</span>531</div><div class="b br"><span class="ic">↓</span>13</div>
+          </div>
+        </div>
+        <div class="fnote">满宽：aspect 1.78 ≥ 1.3；高度 = 卡片宽 ÷ 1.78；角标固定内边距 8，尺寸不变</div>
+        <div class="feed">
+          <div class="fcard"><img src="mockup-assets/w2.jpg"><div class="b tl"><span class="ic">◉</span>386</div><div class="b br"><span class="ic">↓</span>12</div></div>
+          <div class="fcard"><img src="mockup-assets/w6.jpg"><div class="b tl"><span class="ic">◉</span>1.2K</div><div class="b br"><span class="ic">↓</span>29</div></div>
+          <div class="fcard"><img src="mockup-assets/w1.jpg"><div class="b tl"><span class="ic">◉</span>2.4K</div><div class="b br"><span class="ic">↓</span>48</div></div>
+          <div class="fcard"><img src="mockup-assets/w10.jpg"><div class="b tl"><span class="ic">◉</span>742</div></div>
+          <div class="fcard"><img src="mockup-assets/w5.jpg"><div class="b tl"><span class="ic">◉</span>1.5K</div><div class="b br"><span class="ic">↓</span>26</div></div>
+          <div class="fcard"><img src="mockup-assets/w12.jpg"><div class="b tl"><span class="ic">◉</span>3.4K</div><div class="b br"><span class="ic">↓</span>61</div></div>
+          <div class="fcard"><img src="mockup-assets/w7.jpg"><div class="b tl"><span class="ic">◉</span>1.1K</div><div class="b br"><span class="ic">↓</span>17</div></div>
+        </div>
+        <div class="fnote">满宽后接 7 张普通卡：满足「每 8 张≤1、不连续」</div>
+        <div class="fold" style="top:844px"></div>
+      </div>
+    </div>
+    <div class="vcap"><b>⑥</b> 4 列 × 4 行：16 张在一屏内看完，首屏直接进入推荐流。虚线 = 首屏折叠 844。<br>
+      <b>⑦</b> 首个满宽卡在折叠线附近；其后隔 7 张普通卡，满足「每 8 张≤1、不连续」。</div>
+  </div>
+</div>
+
+<!-- 其他三屏 -->
+<div id="screens" class="screens">
+  <div class="kicker">ZEROONE · 1.4.0 · 其余屏</div>
+  <h1 style="font-size:18px;margin:4px 0 14px">合辑详情 / 全屏预览 / 搜索结果</h1>
+  <div class="row">
+    <!-- 详情 -->
+    <div class="frame">
+      <div class="phone">
+        <div class="screen" style="height:780px">
+          <div class="status"><span>9:41</span><span>▮▮ 5G</span></div>
+          <div class="detail-head"><div class="back">‹</div><div class="detail-title">自然风景</div><div class="detail-meta">共 531 张</div><span class="num">4</span></div>
+          <div class="chips"><div class="chip on">全部颜色</div><div class="chip">蓝</div><div class="chip">青</div><div class="chip">绿</div><div class="chip">灰</div></div>
+          <div class="wf">
+            <div class="col">
+              <div class="card" style="height:250px"><img src="mockup-assets/w1.jpg"><div class="b tl"><span class="ic">◉</span>1.2K</div><div class="b br"><span class="ic">↓</span>42</div></div>
+              <div class="card" style="height:206px"><img src="mockup-assets/w2.jpg"><div class="b tl"><span class="ic">◉</span>386</div><div class="b br"><span class="ic">↓</span>12</div></div>
+              <div class="card" style="height:188px"><img src="mockup-assets/w6.jpg"></div>
+              <div class="card" style="height:212px"><img src="mockup-assets/w9.jpg"><div class="b tl"><span class="ic">◉</span>1.1K</div><div class="b br"><span class="ic">↓</span>17</div></div>
+            </div>
+            <div class="col">
+              <div class="card" style="height:214px"><img src="mockup-assets/w10.jpg"><div class="b tl"><span class="ic">◉</span>742</div><div class="b br"><span class="ic">↓</span>9</div></div>
+              <div class="card" style="height:264px"><img src="mockup-assets/w8.jpg"><div class="b tl"><span class="ic">◉</span>2.1K</div><div class="b br"><span class="ic">↓</span>38</div></div>
+              <div class="card" style="height:196px"><img src="mockup-assets/w7.jpg"><div class="b tl"><span class="ic">◉</span>634</div></div>
+              <div class="card" style="height:222px"><img src="mockup-assets/w3.jpg"></div>
+            </div>
+          </div>
+        </div>
+        <div class="pspec"><div>示意说明</div>
+          <p><b>4</b> 左上浏览 / 右下保存；0 值不渲染；满宽规则只用于首页推荐流</p>
+          <p><b>2</b> 双列瀑布流，卡高按 width/height 不等高</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 预览 -->
+    <div class="frame">
+      <div class="phone">
+        <div class="screen preview" style="height:780px">
+          <div class="bg"><img src="mockup-assets/w1.jpg"></div>
+          <div class="shade"></div>
+          <div class="pv-top"><div class="back">‹</div><span class="num">4</span></div>
+          <div class="pv-badges"><div class="b tl"><span class="ic">◉</span>1.2K</div><div class="b br"><span class="ic">↓</span>42</div></div>
+          <div class="toast">已保存到相册，可在系统图库设为壁纸</div>
+          <div class="toolbar">
+            <span class="num">3</span>
+            <div class="tool"><span class="ic">♡</span>收藏</div>
+            <div class="tool on"><span class="ic">↓</span>保存</div>
+            <div class="tool"><span class="ic">✎</span>编辑</div>
+          </div>
+        </div>
+        <div class="pspec"><div>示意说明</div>
+          <p><b>3</b> 删除锁屏/桌面模拟；图标组按屏幕中线居中（虚线为中线）</p>
+          <p><b>4</b> 角标位置与列表一致；保存后 toast 文案如图</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 搜索 -->
+    <div class="frame">
+      <div class="phone">
+        <div class="screen searchpage" style="height:780px">
+          <div class="status"><span>9:41</span><span>▮▮ 5G</span></div>
+          <div class="detail-head"><div class="back">‹</div><div class="detail-title">搜索</div><span class="num">5</span></div>
+          <div class="sfield"><div class="box"><span style="color:#8f909b">⌕</span>&nbsp;风景<span class="x" style="margin-left:auto">✕</span></div></div>
+          <div class="resmeta"><b>全库 531 张</b><span>· 按最新</span></div>
+          <div class="rg">
+            <div class="fcard" style="height:214px"><img src="mockup-assets/w2.jpg"><div class="b tl"><span class="ic">◉</span>986</div><div class="b br"><span class="ic">↓</span>21</div></div>
+            <div class="fcard" style="height:176px"><img src="mockup-assets/w10.jpg"><div class="b tl"><span class="ic">◉</span>412</div></div>
+            <div class="fcard" style="height:172px"><img src="mockup-assets/w3.jpg"></div>
+            <div class="fcard" style="height:210px"><img src="mockup-assets/w5.jpg"><div class="b tl"><span class="ic">◉</span>1.5K</div><div class="b br"><span class="ic">↓</span>26</div></div>
+            <div class="fcard" style="height:196px"><img src="mockup-assets/w6.jpg"><div class="b br"><span class="ic">↓</span>15</div></div>
+            <div class="fcard" style="height:224px"><img src="mockup-assets/w1.jpg"><div class="b tl"><span class="ic">◉</span>3.4K</div><div class="b br"><span class="ic">↓</span>61</div></div>
+          </div>
+        </div>
+        <div class="pspec"><div>示意说明</div>
+          <p><b>5</b> 新增全库搜索结果页，按关键词分页；空关键词回图库列表</p>
+          <p>结果页沿用同一套角标与 0 值隐藏规则</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const only = new URLSearchParams(location.search).get('only');
+  if (only) document.body.dataset.only = only;
+</script>
+</body>
+</html>

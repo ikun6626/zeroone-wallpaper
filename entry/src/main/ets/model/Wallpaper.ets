@@ -42,6 +42,10 @@ export class Wallpaper {
   ratingCount: number = 0;
   /** 后端数字 ID（用于下载/点赞上报；纯本地壁纸为 -1） */
   serverId: number = -1;
+  /** 后端下发的浏览数（仅接口数据；0/缺失表示未知，UI 不渲染、不在前端自增） */
+  viewCount: number = 0;
+  /** 后端下发的下载/保存数（仅接口数据；0/缺失表示未知，UI 不渲染） */
+  downloadCount: number = 0;
 
   constructor(id: string = '', title: string = '', category: string = '', author: string = '',
     uploadTime: number = 0, tags: string = '') {

@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿import { image } from '@kit.ImageKit';
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { image } from '@kit.ImageKit';
 import { promptAction } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { fileIo, picker } from '@kit.CoreFileKit';
@@ -1370,8 +1370,7 @@ export struct ImageEditor {
       return;
     }
     // 产品规则：导出到相册必须登录（浏览与编辑本身不要求登录）
-    if (!AuthManager.getInstance().isLoggedIn()) {
-      AuthManager.getInstance().showAuthOverlay();
+    if (!AuthManager.getInstance().requireLoginForSave()) {
       promptAction.showToast({ message: '请先登录后再保存图片' });
       return;
     }
@@ -1427,11 +1426,11 @@ export struct ImageEditor {
   @Builder
   toolChip(label: string, key: string) {
     Text(label)
-      .fontSize(13)
+      .fontSize(12)
       .fontColor(this.tool === key ? Color.White : '#1F1F1F')
       .backgroundColor(this.tool === key ? '#C22F38' : '#F0F0F0')
-      // 收窄左右内边距，让 6 个工具 chip 在常见机型上一屏放得下
-      .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+      // 6 个 chip 必须一屏放下（440vp 宽）：字号 12 + 左右 10 + 间距 6
+      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
       .borderRadius(14)
       .onClick(() => {
         this.tool = key;
@@ -1538,8 +1537,7 @@ export struct ImageEditor {
               .enabled(!this.saving)
               .onClick((event: ClickEvent, result: SaveButtonOnClickResult) => {
                 if (result === SaveButtonOnClickResult.SUCCESS) {
-                  if (!AuthManager.getInstance().isLoggedIn()) {
-                    AuthManager.getInstance().showAuthOverlay();
+                  if (!AuthManager.getInstance().requireLoginForSave()) {
                     promptAction.showToast({ message: '请先登录后再保存图片' });
                     return;
                   }
@@ -1635,9 +1633,9 @@ export struct ImageEditor {
           })
 
           // ===== 工具 tab + 收起开关 =====
-          Row({ space: 8 }) {
+          Row({ space: 6 }) {
             Scroll() {
-              Row({ space: 8 }) {
+              Row({ space: 6 }) {
                 this.toolChip('旋转/翻转', 'transform')
                 this.toolChip('裁剪', 'crop')
                 this.toolChip('滤镜', 'filter')

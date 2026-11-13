@@ -1,5 +1,5 @@
 import { Wallpaper } from '../../model/Wallpaper';
-import { promptAction, display } from '@kit.ArkUI';
+import { promptAction } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { image } from '@kit.ImageKit';
@@ -12,7 +12,6 @@ import { ImageCache } from '../net/ImageCache';
 import { Haptics } from '../utils/Haptics';
 import { RemoteImage } from './RemoteImage';
 import { LocalWallpapers } from '../constants/LocalWallpapers';
-import { SetWallpaperGuidePanel, WallpaperKind } from './SetWallpaperGuide';
 import { EditGuard } from '../utils/EditGuard';
 import { CanvasSpec } from '../canvas/CanvasSpec';
 import { CanvasPresets, CanvasPreset, PresetIds } from '../canvas/CanvasPresets';
@@ -30,12 +29,6 @@ const DISMISS_THRESHOLD: number = 120;
 const SWITCH_THRESHOLD: number = 70;
 /** 切图过渡时长（ms）：旧图退出 / 新图进入各一段 */
 const SWITCH_ANIM_MS: number = 140;
-/**
- * 铺满(cover)允许裁掉的最大图片比例：超过则默认改用「适应」完整显示。
- * 0.15 表示最多裁掉整张图的 15%（约每边 7.5%）仍算「铺满可接受」。
- * 想要更激进的完整显示就调小，想更贴近壁纸效果就调大。
- */
-const COVER_CROP_TOLERANCE: number = 0.15;
 
 /**
  * 按文件头魔数判断图片真实格式，返回相册资产所需的扩展名。
@@ -78,17 +71,17 @@ function detectImageExt(path: string): string {
  * ImagePreview —— 全屏大图预览（Cuto 风格）
  *
  * 特性：
- *  - 纯黑背景 + 图片**铺满屏幕**（cover，与 Cuto 一致）：所见即壁纸实际效果
- *  - 左上圆形返回箭头；底部 Cuto 式磨砂胶囊：收藏 / 预览模式 / 保存并设为壁纸 / 编辑
- *  - 保存成功后弹出图库设置引导（三方应用无法直接换壁纸，见 SetWallpaperGuide）
+ *  - 纯黑背景 + 图片**默认「适应」（contain，完整显示整张图）**：
+ *      横图/长图进竖屏时不会被裁掉人物或主体，用户可手动切「铺满」看壁纸效果
+ *  - 左上圆形返回箭头；底部 Cuto 式磨砂胶囊：收藏 / 铺满适应 / 保存 / 编辑（按屏幕中线居中）
  *  - 单击图片：工具栏/返回箭头在显示 ↔ 隐藏之间切换（沉浸式看图）
  *  - 双指捏合缩放；双击放大/还原；放大后单指拖动浏览
  *  - 未放大时**左右滑切换上一张 / 下一张**（与首页 Hero 轮播一致）；下滑带动画关闭
  *  - 保存结果**跟随当前显示方式**（所见即所得）：
  *      铺满 → 按设备屏幕像素离屏合成（cover + 当前缩放/平移 = 用户所见），
- *             存出来就是手机比例，设为锁屏/桌面不会被系统二次裁切；
+ *             存出来就是手机比例；
  *      适应 → **直接存原图**（不裁切、不缩放、不重编码），保留原始构图与比例
- *  - 预览模式：普通 → iOS 桌面 → iOS 锁屏（模拟壁纸实际效果）
+ *  - 三方应用无法直接设壁纸：保存到相册后由用户在系统图库自行设置，本页不做模拟预览
  */
 @Component
 export struct ImagePreview {
@@ -124,31 +117,22 @@ export struct ImagePreview {
   @State frameH: number = 0;
   /** 工具栏/返回箭头是否可见（单击图片切换） */
   @State uiVisible: boolean = true;
-  /** 预览模式：normal / home / lock */
-  @State previewMode: string = 'normal';
   /**
    * 图片显示方式：true = Cover 铺满（= 设为壁纸后的真实效果）
    *                false = Contain 适应（完整显示整张图，上下留黑边）
    *
-   * 默认策略（自适应屏幕比例）：铺满必然裁掉一部分图，裁多少取决于
-   * 「图片比例 vs 当前机型屏幕比例」的差距 —— 差距小（如 9:16 图放到细长屏）
-   * 就铺满，差距大（如 2:3 / 4:3 图放到 9:20 屏会被裁掉 20%+）就改「适应」完整显示。
-   * 同一张图在 16:9 / 19.5:9 / 折叠屏上会得到不同结论。见 decideFitCover()。
+   * 默认「适应」：铺满在竖屏下会按高度放大、把横图左右各裁掉一大截
+   * （实测 1024×576 横图在 1080×1920 屏只显示约 32%，右侧人脸被切），
+   * 属于"看不到完整内容"的严重问题，所以默认改为完整显示；
+   * 想要壁纸效果的用户仍可点底部「铺满」手动切换（切换后不再被自动改回）。
+   *
+   * 不再按「图片比例 vs 屏幕比例」自动决定默认值：之前那套自适应依赖
+   * 异步图片回调拿尺寸，回调早于布局时会退回初始值（铺满）从而误裁，
+   * 结果不可预期；默认固定为「适应」更安全、行为也跨机型一致。
    */
-  @State fitCover: boolean = true;
-  /** 用户是否手动点过「铺满/适应」：点过之后 onInfo 不再自动覆盖其选择 */
-  private userTouchedFit: boolean = false;
+  @State fitCover: boolean = false;
   /** 收藏状态（简易本地存储） */
   @State isFav: boolean = false;
-  /** 时钟刷新计数：每分钟 +1，驱动锁屏/桌面模拟层时间重绘 */
-  @State nowTick: number = 0;
-  /** 时钟定时器句柄（-1 表示未启动） */
-  private clockTimer: number = -1;
-  /**
-   * 设为壁纸引导卡片的目标：-1 表示不显示
-   * 只在“保存成功”之后才置为非负值，保证引导不会先于结果出现
-   */
-  @State guideKind: number = -1;
   /** 返回键处理在 EditGuard 中的注册 id（-1 = 未注册） */
   private backId: number = -1;
 
@@ -159,11 +143,8 @@ export struct ImagePreview {
   aboutToAppear(): void {
     // 内部展示项以入参初始化（之后左右滑切换只改 cur，不动父页面的 previewItem）
     this.cur = this.wallpaper;
-    // P1：每次重新进入预览都回到「普通」模式，避免上次的锁屏/桌面模拟残留
-    this.previewMode = 'normal';
     // 进入预览时读取本地收藏状态，保证与首页/合辑/我的页面一致
     this.isFav = PreferenceUtil.isFavorite(this.cur.id);
-    this.startClockTicker();
     // 注册返回键处理：预览是覆盖层，返回键应关闭预览。
     // 此前没有这个拦截，用户按返回键会直接把 App 退出（真实且高频的体验事故）。
     this.backId = EditGuard.push((): boolean => {
@@ -177,70 +158,10 @@ export struct ImagePreview {
       EditGuard.pop(this.backId);
       this.backId = -1;
     }
-    // 离开预览时停掉时钟定时器，避免泄漏
-    // 注意：句柄可能是 setTimeout(对齐整分钟) 或 setInterval(之后的每分钟)，
-    // 两者共用同一 id 空间，clearInterval 对已触发的 timeout 是安全空操作。
-    if (this.clockTimer !== -1) {
-      clearInterval(this.clockTimer);
-      this.clockTimer = -1;
-    }
-  }
-
-  /** 启动时钟：先对齐到下一个整分钟，之后每 60s 刷新一次 nowTick */
-  private startClockTicker(): void {
-    const update: () => void = (): void => {
-      this.nowTick++;
-    };
-    const now: Date = new Date();
-    const msToNextMinute: number = 60000 - (now.getSeconds() * 1000 + now.getMilliseconds());
-    this.clockTimer = setTimeout(() => {
-      update();
-      this.clockTimer = setInterval(update, 60000);
-    }, msToNextMinute);
   }
 
   private clampZoom(value: number): number {
     return Math.min(MAX_SCALE, Math.max(1, value));
-  }
-
-  /**
-   * 当前预览区（≈屏幕可视区）的宽高比。优先用 onAreaChange 记录的实际尺寸；
-   * 若图片解码早于首次布局返回，则退回系统显示的屏幕比例兜底。
-   */
-  private containerRatio(): number {
-    if (this.frameW > 0 && this.frameH > 0) {
-      return this.frameW / this.frameH;
-    }
-    try {
-      const d: display.Display = display.getDefaultDisplaySync();
-      if (d.height > 0) {
-        return d.width / d.height;
-      }
-    } catch (e) {
-      return 0;
-    }
-    return 0;
-  }
-
-  /**
-   * 按「图片比例 vs 当前屏幕比例」自适应决定 铺满(cover) / 适应(contain)。
-   *
-   * 铺满必然裁掉一部分图，裁切比例 = 1 - min(屏比, 图比) / max(屏比, 图比)：
-   *   - 图片比例越接近屏幕 → 裁得越少 → 铺满越自然（如 9:16 图放 16:9 屏）；
-   *   - 差距越大 → 裁得越多 → 改「适应」完整显示（如 2:3 图放 9:20 细长屏）。
-   * 阈值 COVER_CROP_TOLERANCE 控制「最多容忍裁掉多少」。
-   */
-  private decideFitCover(w: number, h: number): boolean {
-    if (w <= 0 || h <= 0) {
-      return this.fitCover;
-    }
-    const scr: number = this.containerRatio();
-    if (scr <= 0) {
-      return this.fitCover;
-    }
-    const img: number = w / h;
-    const crop: number = 1 - Math.min(scr, img) / Math.max(scr, img);
-    return crop <= COVER_CROP_TOLERANCE;
   }
 
   /** 父页面换了一张壁纸（如从收藏列表再点一张）→ 内部展示项同步 */
@@ -374,66 +295,14 @@ export struct ImagePreview {
     }
   }
 
-  /** 当前时间 h:mm（12 小时制，锁屏/桌面大号用） */
-  private currentTimeShort(): string {
-    // 读取 nowTick 建立渲染依赖：分钟变化时定时器驱动重绘
-    if (this.nowTick < 0) { return ''; }
-    const d = new Date();
-    const h24: number = d.getHours();
-    const h: number = h24 % 12 === 0 ? 12 : h24 % 12;
-    const m = d.getMinutes().toString().padStart(2, '0');
-    return `${h}:${m}`;
-  }
-
-  /** 上午 / 下午（动态计算，不再写死「下午」） */
-  private currentPeriod(): string {
-    if (this.nowTick < 0) { return ''; }
-    return new Date().getHours() < 12 ? '上午' : '下午';
-  }
-
-  /** 当前日期：周M月D日 */
-  private currentDateStr(): string {
-    // 跨零点时随 nowTick 一起刷新
-    if (this.nowTick < 0) { return ''; }
-    const d = new Date();
-    const weekdays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
-    return `${weekdays[d.getDay()]} ${d.getMonth() + 1}月${d.getDate()}日`;
-  }
-
-  /** HarmonyOS 系统图标项：SymbolGlyph（系统符号）+ 彩色圆角方块 + 标签 */
-  @Builder
-  iconItem(symbol: Resource, bgColor: string, label: string, fgColor: string = '#FFFFFF') {
-    Column({ space: 4 }) {
-      Column() {
-        SymbolGlyph(symbol)
-          // SymbolGlyph.fontColor 接受 ResourceColor[]（多色），不是单个颜色
-          .fontColor([fgColor])
-          .fontSize(26)
-      }
-      .width(54)
-      .height(54)
-      .backgroundColor(bgColor)
-      .borderRadius(16)
-      .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
-      if (label.length > 0) {
-        Text(label)
-          .fontSize(11)
-          .fontColor(Color.White)
-          .maxLines(1)
-      }
-    }
-    .alignItems(HorizontalAlign.Center)
-  }
-
   /**
-   * 工具栏上的"保存 / 设为壁纸"按钮（与收藏、预览模式、编辑同排）
+   * 工具栏上的保存按钮（与收藏、铺满适应、编辑同排）
    *
    * 说明：写系统相册必须有 SaveButton 的临时授权，普通 Text/Button 点击没有授权，
    * createAsset 会直接抛权限错误，所以这里必须是安全控件（不能自己画一个图标）；
    * 但外观是能改的 —— `SecurityComponentMethod`（SaveButtonAttribute 的基类）提供了
    * `backgroundColor / iconColor / iconSize / fontColor`，所以可以把它做成
-   * "无底色 + 白色图标"，和旁边三个 emoji 图标视觉统一。
+   * "无底色 + 白色图标"，和旁边三个符号图标视觉统一。
    */
   @Builder
   saveWallpaperButton() {
@@ -446,14 +315,12 @@ export struct ImagePreview {
       .onClick((_: ClickEvent, result: SaveButtonOnClickResult) => {
         if (result === SaveButtonOnClickResult.SUCCESS && !this.saving) {
           // 产品规则：保存图片必须登录；收藏等浏览行为仍允许游客使用
-          if (!AuthManager.getInstance().isLoggedIn()) {
-            AuthManager.getInstance().showAuthOverlay();
+          if (!AuthManager.getInstance().requireLoginForSave()) {
             promptAction.showToast({ message: '请先登录后再保存图片' });
             return;
           }
-          // 保存结果跟随当前显示方式（所见即所得）：铺满 → 按屏幕合成壁纸成品；适应 → 存原图。
-          // 锁屏/桌面在保存后的步骤卡片里选（仅铺满模式弹该卡片，见 saveToAlbum）。
-          this.saveToAlbum(WallpaperKind.LOCK);
+          // 保存结果跟随当前显示方式（所见即所得）：铺满 → 按屏幕合成；适应 → 存原图。
+          this.saveToAlbum();
         }
       })
   }
@@ -482,16 +349,14 @@ export struct ImagePreview {
 
   /**
    * 保存到系统相册 —— 保存结果**跟随当前显示方式**（所见即所得）：
-   *   铺满 → 按设备屏幕像素合成 cover 成品（= 设为壁纸的真实效果），并展示设置引导卡片；
-   *   适应 → **直接存原图**（不裁切 / 不缩放 / 不重编码），不弹壁纸引导
-   *          （原图不是"可直接设为壁纸的成品"，系统仍会自行裁切，弹引导语义不通）
-   * @param guideKind 引导卡片默认展开的目标：WallpaperKind.LOCK / HOME（仅铺满模式使用）
+   *   铺满 → 按设备屏幕像素合成 cover 成品（= 铺满预览所见）；
+   *   适应 → **直接存原图**（不裁切 / 不缩放 / 不重编码）
+   * 保存成功后由用户在系统图库自行设置壁纸，App 不做模拟预览或引导面板。
    */
-  async saveToAlbum(guideKind: number): Promise<void> {
+  async saveToAlbum(): Promise<void> {
     if (this.saving) return;
     // 兜底拦截：任何调用路径都要求登录后才能保存
-    if (!AuthManager.getInstance().isLoggedIn()) {
-      AuthManager.getInstance().showAuthOverlay();
+    if (!AuthManager.getInstance().requireLoginForSave()) {
       promptAction.showToast({ message: '请先登录后再保存图片' });
       return;
     }
@@ -524,7 +389,7 @@ export struct ImagePreview {
 
       if (!keepOriginal) {
         // 铺满：按设备屏幕像素离屏合成（cover + 当前缩放/平移 = 用户所见），
-        // 存出来的图就是手机比例，设为壁纸/桌面不会被系统二次裁切。
+        // 存出来的图就是手机比例，在系统图库设为壁纸时不会被二次裁切。
         const bytes: ArrayBuffer = await this.composeCanvasRatio(dest);
         const out = fileIo.openSync(dest, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
         fileIo.writeSync(out.fd, bytes);
@@ -548,12 +413,9 @@ export struct ImagePreview {
       // 保存成功触感
       Haptics.success();
       if (keepOriginal) {
-        promptAction.showToast({ message: '已保存 · 原图' });
+        promptAction.showToast({ message: '已保存 · 原图，可在系统图库设为壁纸' });
       } else {
-        promptAction.showToast({ message: '已保存 · 铺满' });
-        // 保存成功后展示引导卡片（在 SaveButton 回调之外渲染）：
-        // 卡片里可以切"锁屏 / 桌面"，所以主 CTA 只需要一个（Cuto 同款流程）。
-        this.guideKind = guideKind;
+        promptAction.showToast({ message: '已保存 · 铺满，可在系统图库设为壁纸' });
       }
     } catch (e) {
       console.error(`saveToAlbum failed: ${JSON.stringify(e)}`);
@@ -578,23 +440,19 @@ export struct ImagePreview {
         .width('100%').height('100%')
         .backgroundColor(Color.Black)
 
-      // ===== 2. 图片（Cover 铺满屏幕 = 壁纸实际效果；放大后可拖动查看局部） =====
-      // 此前用 Contain 完整显示，横图和方图会在上下留大片黑边、比例"很怪"，
-      // 而且与"设为壁纸"后的效果完全不一致 —— 现在预览即壁纸效果。
+      // ===== 2. 图片（默认「适应」完整显示；用户可点底部切「铺满」） =====
+      // 注意：这里必须是 Contain 为默认 —— 横图在竖屏铺满会按高度放大，
+      // 1080×1920 屏下 16:9 横图只能看到约 32% 宽度（人脸/主体被左右裁掉）。
       Stack() {
-        // 云端壁纸：远程原图（走三级缓存）；本地壁纸：随包内置资源。
+        // 云端壁纸：远程**原图**（imageUrl 优先，走三级缓存、按原始分辨率解码）；
+        // 本地壁纸：随包内置资源。预览与保存都用原图，不用缩略图。
         RemoteImage({
           url: this.remoteSrc(),
           fallback: this.curLocalImg(),
           fit: this.fitCover ? ImageFit.Cover : ImageFit.Contain,
           fallbackFit: this.fitCover ? ImageFit.Cover : ImageFit.Contain,
-          onInfo: (w: number, h: number): void => {
-            // 按「图片比例 vs 当前屏幕比例」自适应决定铺满/适应（见 decideFitCover）；
-            // 用户已手动点过切换按钮，则不再自动覆盖其选择。
-            if (!this.userTouchedFit) {
-              this.fitCover = this.decideFitCover(w, h);
-            }
-          }
+          // 预览必须用原图：放大、保存都要原始清晰度，不能走卡片降采样链路
+          fullSize: true
         })
           .geometryTransition(`wpic_${this.cur.id}`)
       }
@@ -691,126 +549,7 @@ export struct ImagePreview {
         )
       )
 
-      // ===== 3. 桌面预览模拟层（EMUI / HarmonyOS 经典桌面风格） =====
-      if (this.previewMode === 'home') {
-        Column() {
-          // 这里不再画"假状态栏"（信号/网速/电量）：真机顶部本来就有系统状态栏，
-          // 叠一份只会显得脏 —— 参考 Cuto，模拟层只留时钟/日期/图标这些壁纸内容本身。
-          // 大号时间 + 右侧温度 + 日期
-          Row() {
-            Text(this.currentTimeShort())
-              .fontSize(64).fontWeight(FontWeight.Lighter)
-              .fontColor(Color.White)
-              .fontFamily('HarmonyOS Sans')
-              .textShadow({ radius: 6, color: '#88000000', offsetX: 0, offsetY: 1 })
-            Text(this.currentPeriod())
-              .fontSize(18).fontColor(Color.White)
-              .margin({ left: 4, top: 20 })
-          }
-          .width('100%')
-          // 浅色壁纸上白字会看不清：给时钟区加一层半透明暗色底
-          .padding({ left: 18, right: 18, top: 10, bottom: 10 })
-          .backgroundColor('#33000000')
-
-          Text(this.currentDateStr())
-            .fontSize(12).fontColor('#CCFFFFFF')
-            .margin({ top: 4, left: 18 })
-
-          Blank()
-
-          // 4×4 应用图标网格（EMUI 默认顺序 · 鸿蒙系统符号）
-          Column({ space: 20 }) {
-            // 第一行：设置、主题、华为商城、华为视频
-            Row({ space: 16 }) {
-              this.iconItem($r('sys.symbol.gearshape'), '#8E8E93', '设置')
-              this.iconItem($r('sys.symbol.paintpalette'), '#FF9500', '主题')
-              this.iconItem($r('sys.symbol.bag'), '#FF3B30', '华为商城')
-              this.iconItem($r('sys.symbol.video'), '#FF9500', '华为视频')
-            }.width('100%').justifyContent(FlexAlign.Center)
-            // 第二行：音乐、生活服务、服务、应用市场
-            Row({ space: 16 }) {
-              this.iconItem($r('sys.symbol.music'), '#007AFF', '音乐')
-              this.iconItem($r('sys.symbol.paintpalette'), '#FF9500', '生活服务')
-              this.iconItem($r('sys.symbol.heart'), '#34C759', '服务')
-              this.iconItem($r('sys.symbol.cart'), '#007AFF', '应用市场')
-            }.width('100%').justifyContent(FlexAlign.Center)
-            // 第三行：钱包、运动健康、手机管家、图库
-            Row({ space: 16 }) {
-              this.iconItem($r('sys.symbol.creditcard'), '#FF9500', '钱包')
-              this.iconItem($r('sys.symbol.heart'), '#FF3B30', '运动健康')
-              this.iconItem($r('sys.symbol.lock'), '#007AFF', '手机管家')
-              this.iconItem($r('sys.symbol.picture'), '#5AC8FA', '图库')
-            }.width('100%').justifyContent(FlexAlign.Center)
-          }
-          .width('100%').padding({ top: 10 })
-
-          Blank()
-
-          // 底部 Dock：5 个（电话、联系人、信息、浏览器、相机）
-          Row({ space: 12 }) {
-            this.iconItem($r('sys.symbol.phone'), '#34C759', '')
-            this.iconItem($r('sys.symbol.person'), '#FF9500', '')
-            this.iconItem($r('sys.symbol.message'), '#34C759', '')
-            this.iconItem($r('sys.symbol.wifi'), '#AF52DE', '')
-            this.iconItem($r('sys.symbol.camera'), '#8E8E93', '')
-          }
-          .padding({ left: 12, right: 12, top: 12, bottom: 12 })
-          .backgroundColor('#33000000')
-          .borderRadius(28)
-          .margin({ bottom: 16 })
-
-          // HarmonyOS 导航栏：返回三角、圆圈主页、方块多任务
-          Row() {
-            SymbolGlyph($r('sys.symbol.chevron_left'))
-              .fontColor([Color.White]).fontSize(18).width(36).height(36)
-            Blank()
-            SymbolGlyph($r('sys.symbol.circle'))
-              .fontColor([Color.White]).fontSize(14).width(36).height(36)
-            Blank()
-            SymbolGlyph($r('sys.symbol.square'))
-              .fontColor([Color.White]).fontSize(14).width(36).height(36)
-          }
-          .width('100%')
-          .padding({ left: 24, right: 24, top: 8, bottom: 12 })
-        }
-        .width('100%').height('100%')
-        .padding({ top: 8 })
-        .hitTestBehavior(HitTestMode.None)
-      }
-
-      // ===== 4. 锁屏预览模拟层（Cuto 风格：时间在上，居中） =====
-      if (this.previewMode === 'lock') {
-        Column() {
-          // 同桌面模拟层：不画假状态栏（真机顶部有系统状态栏），Cuto 的锁屏预览也只留时钟
-          Blank()
-
-          // 日期 + 大号时间（Cuto 风格：在上半部分居中）
-          Column({ space: 6 }) {
-            Text(this.currentDateStr())
-              .fontSize(18).fontWeight(FontWeight.Medium)
-              .fontColor(Color.White)
-              .textShadow({ radius: 4, color: '#88000000', offsetX: 0, offsetY: 1 })
-            Text(this.currentTimeShort())
-              .fontSize(78).fontWeight(FontWeight.Lighter)
-              .fontColor(Color.White)
-              .fontFamily('HarmonyOS Sans')
-              .textShadow({ radius: 10, color: '#99000000', offsetX: 0, offsetY: 2 })
-          }
-          // 浅色壁纸上白色时钟会糊：加半透明暗色底，保证任何壁纸都可读
-          .width('92%').alignItems(HorizontalAlign.Center)
-          .padding({ top: 12, bottom: 12 })
-          .backgroundColor('#26000000')
-          .borderRadius(24)
-          .margin({ bottom: 200 })
-
-          Blank()
-        }
-        .width('100%').height('100%')
-        .padding({ top: 10 })
-        .hitTestBehavior(HitTestMode.None)
-      }
-
-      // ===== 5. 左上角返回箭头（仅 UI 可见时显示） =====
+      // ===== 3. 左上角返回箭头（仅 UI 可见时显示） =====
       if (this.uiVisible) {
         Text('‹')
           .fontSize(32).fontColor(Color.White)
@@ -821,11 +560,11 @@ export struct ImagePreview {
           .onClick(() => { this.onClose(); })
       }
 
-      // ===== 6. 底部操作区（Cuto 式：一个磨砂胶囊放图标 + 一个主 CTA，仅 UI 可见时显示） =====
+      // ===== 4. 底部操作区（Cuto 式磨砂胶囊工具栏，仅 UI 可见时显示） =====
       if (this.uiVisible) {
         Column({ space: 12 }) {
-          // 磨砂胶囊工具栏：收藏 / 预览模式（普通→桌面→锁屏）/ 保存并设为壁纸 / 编辑
-          //  四件事全在一排，图标统一用系统符号（SymbolGlyph）+ 同一个白色 + 同一号字，
+          // 磨砂胶囊工具栏：收藏 / 铺满适应 / 保存 / 编辑
+          //  四个动作全在一排，按屏幕中线居中；图标统一用系统符号（SymbolGlyph）+ 同一个白色 + 同一号字，
           //  不再混 emoji（emoji 自带颜色，四个图标永远凑不齐一套色调）。
           // 保存按钮是系统 SaveButton（写相册的临时授权必需），用 backgroundColor/iconColor/iconSize
           //  抹掉自带底色后，和这三个符号视觉一致。
@@ -842,20 +581,7 @@ export struct ImagePreview {
                 promptAction.showToast({ message: this.isFav ? '已收藏 ❤️' : '已取消收藏' });
               })
 
-            // 预览模式切换（普通→桌面→锁屏→普通）
-            Stack() {
-              SymbolGlyph(this.previewMode === 'normal' ? $r('sys.symbol.picture')
-                : (this.previewMode === 'home' ? $r('sys.symbol.phone') : $r('sys.symbol.lock')))
-                .fontColor(['#F2F2F5'])
-                .fontSize(22)
-            }
-            .onClick(() => {
-              if (this.previewMode === 'normal') this.previewMode = 'home';
-              else if (this.previewMode === 'home') this.previewMode = 'lock';
-              else this.previewMode = 'normal';
-            })
-
-            // 铺满 / 适应切换：默认按屏幕比例自适应，这里供用户手动覆盖
+            // 铺满 / 适应切换：默认「适应」，用户可手动切「铺满」看壁纸效果
             Text(this.fitCover ? '铺满' : '适应')
               .fontSize(13)
               .fontColor('#F2F2F5')
@@ -863,19 +589,18 @@ export struct ImagePreview {
               .backgroundColor('#33FFFFFF')
               .borderRadius(13)
               .onClick(() => {
-                // 用户手动切换后，后续图片回调不再自动改回
-                this.userTouchedFit = true;
+                Haptics.light();
                 this.fitCover = !this.fitCover;
                 // 切换时重置缩放与位移：两种模式的平移边界不同，带着旧偏移会"跳一下"
                 this.zoomScale = 1;
                 this.offsetX = 0;
                 this.offsetY = 0;
                 promptAction.showToast({
-                  message: this.fitCover ? '铺满（= 设为壁纸后的效果）' : '适应（完整显示整张图）'
+                  message: this.fitCover ? '铺满（按屏幕比例合成）' : '适应（完整显示整张图）'
                 });
               })
 
-            // 保存铺满图并给出设置步骤（锁屏/桌面在卡片里选）
+            // 保存（铺满 → 屏幕比例成品；适应 → 原图）
             this.saveWallpaperButton()
 
             // 编辑
@@ -893,7 +618,7 @@ export struct ImagePreview {
         .margin({ bottom: 36 })
       }
 
-      // ===== 7. 图片编辑器覆盖层 =====
+      // ===== 5. 图片编辑器覆盖层 =====
       if (this.showEditor) {
         ImageEditor({
           wallpaper: this.cur,
@@ -902,13 +627,6 @@ export struct ImagePreview {
         })
       }
 
-      // ===== 8. 设为壁纸引导（保存成功后出现，置于最上层） =====
-      if (this.guideKind >= 0) {
-        SetWallpaperGuidePanel({
-          kind: this.guideKind,
-          onClose: () => { this.guideKind = -1; }
-        })
-      }
     }
     .width('100%')
     .height('100%')

@@ -243,7 +243,7 @@ export struct AccountPage {
               }
               .width('100%')
 
-              Text('账号用于跨设备同步收藏与获取每日精选；密码在服务端以不可逆哈希保存，我们无法看到明文。')
+              Text('账号用于保存图片；收藏保存在本机，暂不跨设备同步；密码在服务端以不可逆哈希保存，我们无法看到明文。')
                 .fontSize(11)
                 .fontColor('#A8A8B5')
                 .lineHeight(17)

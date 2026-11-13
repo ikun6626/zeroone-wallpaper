@@ -4,7 +4,7 @@ import { Wallpaper } from '../../model/Wallpaper';
  * LocalWallpapers —— 壁纸目录（全离线，不依赖任何网络与云服务）
  *
  * 由 tools/gen_local_catalog.py 生成，请勿手改：
- *   283 条真实素材来自 assets-out/wallpapers-import.csv 与 assets-local/batches/*.csv
+ *   307 条真实素材来自 assets-local/base-51.csv 与 assets-local/batches/*.csv
  *   12 条个人宠物照片为纯本地资源（custom_cat_XX / custom_dog_XX）
  *
  * 图片资源：resources/base/media/ 下
@@ -15,18 +15,21 @@ import { Wallpaper } from '../../model/Wallpaper';
  *    不是真实壁纸，已删除。
  */
 export class LocalWallpapers {
-  /** 核心分类（全部 = 不过滤） */
-  static readonly CATEGORIES: string[] = ['全部', '自然风景', '城市建筑', '极简风格', '动物萌宠'];
+  /** 核心分类（全部 = 不过滤；由实际条目生成，新增类目可直接浏览） */
+  static readonly CATEGORIES: string[] = ['全部', '自然风景', '城市建筑', '极简风格', '动物萌宠', '人物', '风景', '创意', '动漫', '卡通', '萌宠'];
+
+  /** 已淘汰重复图的 id → 保留图 id（getLocalImg/getThumb 会解析） */
+  static readonly DEDUP_ALIASES: Record<string, string> = {'jofy88_fall_1051300_1920_1': 'jofy88_fall_1051300', 'w1462_1c7d482e29': 'w1546_07bfd74f9c', 'w2004_160101601b': 'w3474_28910b7791'};
 
   /** 预置标签表 */
   static readonly PRESET_TAGS: string[] = [
     '星空', '科幻太空', '暗色', '治愈', '清新', '赛博朋克', '国风',
-    '萌宠', '自然风景', '城市夜景', '简约', '插画', '梦幻', '暖色'
+    '萌宠', '风景', '城市夜景', '简约', '插画', '梦幻', '暖色'
   ];
 
   /** 全部壁纸（真实素材在前，个人照片在后） */
   static readonly ALL: Wallpaper[] = [
-    // ==================== 真实素材（283 张，随包内置） ====================
+    // ==================== 真实素材（307 张，随包内置） ====================
     new Wallpaper('12019_sunset_2080072', '日落', '自然风景', '', 1789002120426, '自然风光,日落'),
     new Wallpaper('12659751_airplane_4252410', '航班', '自然风景', '', 1788220168696, '自然风光,航班'),
     new Wallpaper('5336885_japan_2418041', '日本', '城市建筑', '', 1788220544554, '城市建筑,日本'),
@@ -45,7 +48,6 @@ export class LocalWallpapers {
     new Wallpaper('jaclou_dl_shetland_sheepdog_8342397', '狗狗', '动物萌宠', 'jaclou-dl', 1788220743242, '动物萌宠,狗狗'),
     new Wallpaper('janus69_port_3585566', 'Port', '城市建筑', 'janus69', 1788220655554, '城市建筑,port'),
     new Wallpaper('jillwellington_family_591581', 'Jillwellington', '自然风景', 'jillwellington-family', 1788220524404, '自然风光,jillwellington'),
-    new Wallpaper('jofy88_fall_1051300_1920_1', 'Fall', '自然风景', 'jofy88-fall', 1788220677294, '自然风光,fall'),
     new Wallpaper('jofy88_fall_1051300', 'Fall', '自然风景', 'jofy88-fall', 1788220660850, '自然风光,fall'),
     new Wallpaper('kanenori_landscape_5278857', 'Landscape', '自然风景', 'kanenori', 1788220683916, '自然风光,landscape'),
     new Wallpaper('kanenori_landscape_5361558', 'Landscape', '自然风景', 'kanenori', 1788220767623, '自然风光,landscape'),
@@ -83,7 +85,6 @@ export class LocalWallpapers {
     new Wallpaper('w1249_249a80c79b', '风景 1249', '自然风景', '', 1789279897261, '风景,scenery'),
     new Wallpaper('w1260_1d28565a9d', '风景 1260', '自然风景', '', 1789279840294, '风景,scenery'),
     new Wallpaper('w1379_0d14982d1e', '风景 1379', '自然风景', '', 1789279722244, '风景,scenery'),
-    new Wallpaper('w1462_1c7d482e29', '风景 1462', '自然风景', '', 1789279831000, '风景,scenery'),
     new Wallpaper('w1546_07bfd74f9c', '风景 1546', '自然风景', '', 1789279691775, '风景,scenery'),
     new Wallpaper('w1547_1f09c21c1b', '风景 1547', '自然风景', '', 1789279854887, '风景,scenery'),
     new Wallpaper('w1554_1af4f3052e', '风景 1554', '自然风景', '', 1789279824824, '风景,scenery'),
@@ -95,7 +96,6 @@ export class LocalWallpapers {
     new Wallpaper('w1747_0e5be81731', '风景 1747', '自然风景', '', 1789279736242, '风景,scenery'),
     new Wallpaper('w1794_090f8625fd', '风景 1794', '自然风景', '', 1789279697705, '风景,scenery'),
     new Wallpaper('w1815_0dd727c19c', '风景 1815', '自然风景', '', 1789279727343, '风景,scenery'),
-    new Wallpaper('w2004_160101601b', '风景 2004', '自然风景', '', 1789279800968, '风景,scenery'),
     new Wallpaper('w2023_00acd46766', '风景 2023', '自然风景', '', 1789279642594, '风景,scenery'),
     new Wallpaper('w204_01e4269409', '风景 204', '自然风景', '', 1789279663555, '风景,scenery'),
     new Wallpaper('w2063_1e479a6c3d', '风景 2063', '自然风景', '', 1789279843804, '风景,scenery'),
@@ -310,6 +310,33 @@ export class LocalWallpapers {
     new Wallpaper('w93_0ca9d68700', '风景 93', '自然风景', '', 1789279718374, '风景,scenery'),
     new Wallpaper('w945_078da43d4f', '风景 945', '自然风景', '', 1789279689430, '风景,scenery'),
     new Wallpaper('w994_2152191a92', '风景 994', '自然风景', '', 1789279867041, '风景,scenery'),
+    new Wallpaper('w113_8f36ac99de45532428c090951468ad4c', '人物·美女', '人物', '', 1793689509421, '人物,美女,人像,写真'),
+    new Wallpaper('w113_7058e0dddcfa87eb8d7f42f61fa3e6a4', '风景·花卉', '风景', '', 1793689509175, '风景,花卉,插画'),
+    new Wallpaper('w113_32303811c3fbe8a92e13194689242159', '创意·猫咪', '创意', '', 1793689508872, '创意,猫咪,橘猫,拼贴'),
+    new Wallpaper('w113_4f4d359d58565f4b3f8b2b3ae031f50d', '风景·水面', '风景', '', 1793689509085, '风景,水面,波纹,雏菊'),
+    new Wallpaper('w113_da21ab72f95564e7f7feff918c5650ce', '风景·海滩', '风景', '', 1793689509248, '风景,海滩,夕阳,大海'),
+    new Wallpaper('w113_735bdcc2483b4453a0bdb2e2bdc139d2', '创意·拼贴', '创意', '', 1793689509611, '创意,拼贴,猫'),
+    new Wallpaper('w113_39b05a7a1e86e7ba3a6f14bae149a252', '动漫·蜡笔小新', '动漫', '', 1793689510149, '动漫,蜡笔小新,雪景,夜晚'),
+    new Wallpaper('w113_80b2cd1c93f77a38456bd1598bf4fdf8', '人物·美女', '人物', '', 1793689509978, '人物,美女,人像,写真'),
+    new Wallpaper('w113_794508e5995dd2b18bc023aac80a2da5', '人物·美女', '人物', '', 1793689508724, '人物,美女,人像,背影'),
+    new Wallpaper('w113_70cadd6185c99fcf2c196ea81e4cc483', '风景·樱花', '风景', '', 1793689510415, '风景,樱花,咖啡店,绣球花'),
+    new Wallpaper('w113_48c3a59f44eba6388151a96b5e3f4952', '创意·卡通', '创意', '', 1793689509901, '创意,卡通,葱姜蒜,励志'),
+    new Wallpaper('w113_ad5229cdb677cf90daa97c0f37649fe2', '风景·街道', '风景', '', 1793689509674, '风景,街道,日落,路牌'),
+    new Wallpaper('w113_b48a73d97cc1d094108d6554893cb8a1', '风景·树枝', '风景', '', 1793689510614, '风景,树枝,日落,剪影'),
+    new Wallpaper('w113_f8777eefe938d109c1aa622c333af4e9', '风景·樱花', '风景', '', 1793689508669, '风景,樱花,庭院,花瓣'),
+    new Wallpaper('w113_67358d6dc95002cff7b2b7c8bc29d8db', '卡通·卡通人物', '卡通', '', 1793689509818, '卡通,卡通人物,西装,墨镜'),
+    new Wallpaper('w113_2ffc70ee477e1c3692f132c5463efbee', '人物·美女', '人物', '', 1793689510319, '人物,美女,长发,特写'),
+    new Wallpaper('w113_e062497387214f99fd2fc689d8701198', '萌宠·柯基', '萌宠', '', 1793689509007, '萌宠,柯基,狗狗,可爱'),
+    new Wallpaper('w113_39740178d788f3739c61e5e68b5416c9', '萌宠·窗台', '萌宠', '', 1793689508554, '萌宠,窗台,雪景,冬夜'),
+    new Wallpaper('w113_ff2a096e31cbc04cbf7a07d3ff118f61', '风景·雪山', '风景', '', 1793689510506, '风景,雪山,湖泊,森林'),
+    new Wallpaper('w113_b7812fe0faef26ff38525c55c86a7b34', '风景·雪山', '风景', '', 1793689508781, '风景,雪山,灯塔,夕阳'),
+    new Wallpaper('w113_1e6a3af667a0216bfaebc5e76f76304a', '动漫·星空', '动漫', '', 1793689509743, '动漫,星空,流星,海边'),
+    new Wallpaper('w113_c9f756162f5082565ca8d07bd0fba959', '风景·烟花', '风景', '', 1793689510240, '风景,烟花,夜景,浪漫'),
+    new Wallpaper('w113_e7a08bddc41dbd779f98e6158cfb15a9', '人物·美女', '人物', '', 1793689510069, '人物,美女,室内,美腿'),
+    new Wallpaper('w113_522ffe026f42ee5a45f6ee835fb42cd3', '风景·丹霞', '风景', '', 1793689508938, '风景,丹霞,数字艺术'),
+    new Wallpaper('w113_5d33105a7f34e1357d8f8069b0dd2c65', '人物·美女', '人物', '', 1793689509299, '人物,美女,棒球帽,马甲线'),
+    new Wallpaper('w113_46afeff22288e709373497bc9a12fea2', '风景·海边', '风景', '', 1793689508453, '风景,海边,暮色,人物剪影'),
+    new Wallpaper('w113_5183afd1fbe04c53770cc77861b7a496', '风景·瀑布', '风景', '', 1793689492830, '风景,瀑布,河流,雪山'),
 
     // ==================== 个人宠物照片（12 张） ====================
     new Wallpaper('my_cat_01', '我的萌宠·01', '动物萌宠', '我', 1700033000000, '萌宠,治愈'),
@@ -346,7 +373,6 @@ export class LocalWallpapers {
     'jaclou_dl_shetland_sheepdog_8342397': 'wp_jaclou_dl_shetland_sheepdog_8342397',
     'janus69_port_3585566': 'wp_janus69_port_3585566',
     'jillwellington_family_591581': 'wp_jillwellington_family_591581',
-    'jofy88_fall_1051300_1920_1': 'wp_jofy88_fall_1051300_1920_1',
     'jofy88_fall_1051300': 'wp_jofy88_fall_1051300',
     'kanenori_landscape_5278857': 'wp_kanenori_landscape_5278857',
     'kanenori_landscape_5361558': 'wp_kanenori_landscape_5361558',
@@ -384,7 +410,6 @@ export class LocalWallpapers {
     'w1249_249a80c79b': 'wp_w1249_249a80c79b',
     'w1260_1d28565a9d': 'wp_w1260_1d28565a9d',
     'w1379_0d14982d1e': 'wp_w1379_0d14982d1e',
-    'w1462_1c7d482e29': 'wp_w1462_1c7d482e29',
     'w1546_07bfd74f9c': 'wp_w1546_07bfd74f9c',
     'w1547_1f09c21c1b': 'wp_w1547_1f09c21c1b',
     'w1554_1af4f3052e': 'wp_w1554_1af4f3052e',
@@ -396,7 +421,6 @@ export class LocalWallpapers {
     'w1747_0e5be81731': 'wp_w1747_0e5be81731',
     'w1794_090f8625fd': 'wp_w1794_090f8625fd',
     'w1815_0dd727c19c': 'wp_w1815_0dd727c19c',
-    'w2004_160101601b': 'wp_w2004_160101601b',
     'w2023_00acd46766': 'wp_w2023_00acd46766',
     'w204_01e4269409': 'wp_w204_01e4269409',
     'w2063_1e479a6c3d': 'wp_w2063_1e479a6c3d',
@@ -611,6 +635,33 @@ export class LocalWallpapers {
     'w93_0ca9d68700': 'wp_w93_0ca9d68700',
     'w945_078da43d4f': 'wp_w945_078da43d4f',
     'w994_2152191a92': 'wp_w994_2152191a92',
+    'w113_8f36ac99de45532428c090951468ad4c': 'wp_w113_8f36ac99de45532428c090951468ad4c',
+    'w113_7058e0dddcfa87eb8d7f42f61fa3e6a4': 'wp_w113_7058e0dddcfa87eb8d7f42f61fa3e6a4',
+    'w113_32303811c3fbe8a92e13194689242159': 'wp_w113_32303811c3fbe8a92e13194689242159',
+    'w113_4f4d359d58565f4b3f8b2b3ae031f50d': 'wp_w113_4f4d359d58565f4b3f8b2b3ae031f50d',
+    'w113_da21ab72f95564e7f7feff918c5650ce': 'wp_w113_da21ab72f95564e7f7feff918c5650ce',
+    'w113_735bdcc2483b4453a0bdb2e2bdc139d2': 'wp_w113_735bdcc2483b4453a0bdb2e2bdc139d2',
+    'w113_39b05a7a1e86e7ba3a6f14bae149a252': 'wp_w113_39b05a7a1e86e7ba3a6f14bae149a252',
+    'w113_80b2cd1c93f77a38456bd1598bf4fdf8': 'wp_w113_80b2cd1c93f77a38456bd1598bf4fdf8',
+    'w113_794508e5995dd2b18bc023aac80a2da5': 'wp_w113_794508e5995dd2b18bc023aac80a2da5',
+    'w113_70cadd6185c99fcf2c196ea81e4cc483': 'wp_w113_70cadd6185c99fcf2c196ea81e4cc483',
+    'w113_48c3a59f44eba6388151a96b5e3f4952': 'wp_w113_48c3a59f44eba6388151a96b5e3f4952',
+    'w113_ad5229cdb677cf90daa97c0f37649fe2': 'wp_w113_ad5229cdb677cf90daa97c0f37649fe2',
+    'w113_b48a73d97cc1d094108d6554893cb8a1': 'wp_w113_b48a73d97cc1d094108d6554893cb8a1',
+    'w113_f8777eefe938d109c1aa622c333af4e9': 'wp_w113_f8777eefe938d109c1aa622c333af4e9',
+    'w113_67358d6dc95002cff7b2b7c8bc29d8db': 'wp_w113_67358d6dc95002cff7b2b7c8bc29d8db',
+    'w113_2ffc70ee477e1c3692f132c5463efbee': 'wp_w113_2ffc70ee477e1c3692f132c5463efbee',
+    'w113_e062497387214f99fd2fc689d8701198': 'wp_w113_e062497387214f99fd2fc689d8701198',
+    'w113_39740178d788f3739c61e5e68b5416c9': 'wp_w113_39740178d788f3739c61e5e68b5416c9',
+    'w113_ff2a096e31cbc04cbf7a07d3ff118f61': 'wp_w113_ff2a096e31cbc04cbf7a07d3ff118f61',
+    'w113_b7812fe0faef26ff38525c55c86a7b34': 'wp_w113_b7812fe0faef26ff38525c55c86a7b34',
+    'w113_1e6a3af667a0216bfaebc5e76f76304a': 'wp_w113_1e6a3af667a0216bfaebc5e76f76304a',
+    'w113_c9f756162f5082565ca8d07bd0fba959': 'wp_w113_c9f756162f5082565ca8d07bd0fba959',
+    'w113_e7a08bddc41dbd779f98e6158cfb15a9': 'wp_w113_e7a08bddc41dbd779f98e6158cfb15a9',
+    'w113_522ffe026f42ee5a45f6ee835fb42cd3': 'wp_w113_522ffe026f42ee5a45f6ee835fb42cd3',
+    'w113_5d33105a7f34e1357d8f8069b0dd2c65': 'wp_w113_5d33105a7f34e1357d8f8069b0dd2c65',
+    'w113_46afeff22288e709373497bc9a12fea2': 'wp_w113_46afeff22288e709373497bc9a12fea2',
+    'w113_5183afd1fbe04c53770cc77861b7a496': 'wp_w113_5183afd1fbe04c53770cc77861b7a496',
     'my_cat_01': 'custom_cat_01',
     'my_cat_02': 'custom_cat_02',
     'my_cat_04': 'custom_cat_04',
@@ -645,7 +696,6 @@ export class LocalWallpapers {
     'jaclou_dl_shetland_sheepdog_8342397': 'wp_jaclou_dl_shetland_sheepdog_8342397_thumb',
     'janus69_port_3585566': 'wp_janus69_port_3585566_thumb',
     'jillwellington_family_591581': 'wp_jillwellington_family_591581_thumb',
-    'jofy88_fall_1051300_1920_1': 'wp_jofy88_fall_1051300_1920_1_thumb',
     'jofy88_fall_1051300': 'wp_jofy88_fall_1051300_thumb',
     'kanenori_landscape_5278857': 'wp_kanenori_landscape_5278857_thumb',
     'kanenori_landscape_5361558': 'wp_kanenori_landscape_5361558_thumb',
@@ -683,7 +733,6 @@ export class LocalWallpapers {
     'w1249_249a80c79b': 'wp_w1249_249a80c79b_thumb',
     'w1260_1d28565a9d': 'wp_w1260_1d28565a9d_thumb',
     'w1379_0d14982d1e': 'wp_w1379_0d14982d1e_thumb',
-    'w1462_1c7d482e29': 'wp_w1462_1c7d482e29_thumb',
     'w1546_07bfd74f9c': 'wp_w1546_07bfd74f9c_thumb',
     'w1547_1f09c21c1b': 'wp_w1547_1f09c21c1b_thumb',
     'w1554_1af4f3052e': 'wp_w1554_1af4f3052e_thumb',
@@ -695,7 +744,6 @@ export class LocalWallpapers {
     'w1747_0e5be81731': 'wp_w1747_0e5be81731_thumb',
     'w1794_090f8625fd': 'wp_w1794_090f8625fd_thumb',
     'w1815_0dd727c19c': 'wp_w1815_0dd727c19c_thumb',
-    'w2004_160101601b': 'wp_w2004_160101601b_thumb',
     'w2023_00acd46766': 'wp_w2023_00acd46766_thumb',
     'w204_01e4269409': 'wp_w204_01e4269409_thumb',
     'w2063_1e479a6c3d': 'wp_w2063_1e479a6c3d_thumb',
@@ -910,11 +958,45 @@ export class LocalWallpapers {
     'w93_0ca9d68700': 'wp_w93_0ca9d68700_thumb',
     'w945_078da43d4f': 'wp_w945_078da43d4f_thumb',
     'w994_2152191a92': 'wp_w994_2152191a92_thumb',
+    'w113_8f36ac99de45532428c090951468ad4c': 'wp_w113_8f36ac99de45532428c090951468ad4c_thumb',
+    'w113_7058e0dddcfa87eb8d7f42f61fa3e6a4': 'wp_w113_7058e0dddcfa87eb8d7f42f61fa3e6a4_thumb',
+    'w113_32303811c3fbe8a92e13194689242159': 'wp_w113_32303811c3fbe8a92e13194689242159_thumb',
+    'w113_4f4d359d58565f4b3f8b2b3ae031f50d': 'wp_w113_4f4d359d58565f4b3f8b2b3ae031f50d_thumb',
+    'w113_da21ab72f95564e7f7feff918c5650ce': 'wp_w113_da21ab72f95564e7f7feff918c5650ce_thumb',
+    'w113_735bdcc2483b4453a0bdb2e2bdc139d2': 'wp_w113_735bdcc2483b4453a0bdb2e2bdc139d2_thumb',
+    'w113_39b05a7a1e86e7ba3a6f14bae149a252': 'wp_w113_39b05a7a1e86e7ba3a6f14bae149a252_thumb',
+    'w113_80b2cd1c93f77a38456bd1598bf4fdf8': 'wp_w113_80b2cd1c93f77a38456bd1598bf4fdf8_thumb',
+    'w113_794508e5995dd2b18bc023aac80a2da5': 'wp_w113_794508e5995dd2b18bc023aac80a2da5_thumb',
+    'w113_70cadd6185c99fcf2c196ea81e4cc483': 'wp_w113_70cadd6185c99fcf2c196ea81e4cc483_thumb',
+    'w113_48c3a59f44eba6388151a96b5e3f4952': 'wp_w113_48c3a59f44eba6388151a96b5e3f4952_thumb',
+    'w113_ad5229cdb677cf90daa97c0f37649fe2': 'wp_w113_ad5229cdb677cf90daa97c0f37649fe2_thumb',
+    'w113_b48a73d97cc1d094108d6554893cb8a1': 'wp_w113_b48a73d97cc1d094108d6554893cb8a1_thumb',
+    'w113_f8777eefe938d109c1aa622c333af4e9': 'wp_w113_f8777eefe938d109c1aa622c333af4e9_thumb',
+    'w113_67358d6dc95002cff7b2b7c8bc29d8db': 'wp_w113_67358d6dc95002cff7b2b7c8bc29d8db_thumb',
+    'w113_2ffc70ee477e1c3692f132c5463efbee': 'wp_w113_2ffc70ee477e1c3692f132c5463efbee_thumb',
+    'w113_e062497387214f99fd2fc689d8701198': 'wp_w113_e062497387214f99fd2fc689d8701198_thumb',
+    'w113_39740178d788f3739c61e5e68b5416c9': 'wp_w113_39740178d788f3739c61e5e68b5416c9_thumb',
+    'w113_ff2a096e31cbc04cbf7a07d3ff118f61': 'wp_w113_ff2a096e31cbc04cbf7a07d3ff118f61_thumb',
+    'w113_b7812fe0faef26ff38525c55c86a7b34': 'wp_w113_b7812fe0faef26ff38525c55c86a7b34_thumb',
+    'w113_1e6a3af667a0216bfaebc5e76f76304a': 'wp_w113_1e6a3af667a0216bfaebc5e76f76304a_thumb',
+    'w113_c9f756162f5082565ca8d07bd0fba959': 'wp_w113_c9f756162f5082565ca8d07bd0fba959_thumb',
+    'w113_e7a08bddc41dbd779f98e6158cfb15a9': 'wp_w113_e7a08bddc41dbd779f98e6158cfb15a9_thumb',
+    'w113_522ffe026f42ee5a45f6ee835fb42cd3': 'wp_w113_522ffe026f42ee5a45f6ee835fb42cd3_thumb',
+    'w113_5d33105a7f34e1357d8f8069b0dd2c65': 'wp_w113_5d33105a7f34e1357d8f8069b0dd2c65_thumb',
+    'w113_46afeff22288e709373497bc9a12fea2': 'wp_w113_46afeff22288e709373497bc9a12fea2_thumb',
+    'w113_5183afd1fbe04c53770cc77861b7a496': 'wp_w113_5183afd1fbe04c53770cc77861b7a496_thumb',
   };
+
+  /** 解析重复图别名：淘汰 id 一律回落到保留 id */
+  static resolveId(id: string): string {
+    const keep: string | undefined = LocalWallpapers.DEDUP_ALIASES[id];
+    return keep === undefined ? id : keep;
+  }
 
   /** 详情用图（列表外的场景：预览、编辑器、设为壁纸） */
   static getLocalImg(id: string): Resource | undefined {
-    const name: string | undefined = LocalWallpapers.LOCAL_IMG[id];
+    const resolved: string = LocalWallpapers.resolveId(id);
+    const name: string | undefined = LocalWallpapers.LOCAL_IMG[resolved];
     if (name === undefined || name.length === 0) {
       return undefined;
     }
@@ -923,10 +1005,11 @@ export class LocalWallpapers {
 
   /** 列表用缩略图（省内存：1440 的原图解码成本高） */
   static getThumb(id: string): Resource | undefined {
-    const name: string | undefined = LocalWallpapers.LOCAL_THUMB[id];
+    const resolved: string = LocalWallpapers.resolveId(id);
+    const name: string | undefined = LocalWallpapers.LOCAL_THUMB[resolved];
     if (name !== undefined && name.length > 0) {
       return $r(`app.media.${name}`);
     }
-    return LocalWallpapers.getLocalImg(id);
+    return LocalWallpapers.getLocalImg(resolved);
   }
 }

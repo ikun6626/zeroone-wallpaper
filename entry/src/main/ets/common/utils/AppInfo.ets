@@ -31,4 +31,16 @@ export class AppInfo {
       return '1.0.0';
     }
   }
+
+  /** 数字版本号 versionCode（版本更新检查用；读取失败返回 0 = 永不提示更新） */
+  static versionCode(): number {
+    try {
+      const info: bundleManager.BundleInfo = bundleManager.getBundleInfoForSelfSync(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+      return info.versionCode;
+    } catch (e) {
+      console.error(`AppInfo versionCode failed: ${JSON.stringify(e)}`);
+      return 0;
+    }
+  }
 }

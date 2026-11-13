@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>ZeroOne 产品改进 · 效果示意</title>
+<style>
+  :root{
+    --page:#f2f2f3; --ink:#15161a; --muted:#6b6c74; --line:#d9d9de;
+    --frame:#0e0f12; --surface:#1b1c21; --surface2:#24252b;
+    --text:#f2f2f5; --text2:#9c9ca8; --accent:#d2454f; --gold:#e7c27a;
+  }
+  *{box-sizing:border-box; -webkit-font-smoothing:antialiased;}
+  body{margin:0; background:var(--page); color:var(--ink);
+       font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;}
+  .page{width:1780px; padding:34px 56px 30px;}
+  .head{display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:22px;}
+  .kicker{font-size:11px; letter-spacing:.14em; color:var(--muted); text-transform:uppercase;}
+  h1{font-size:26px; line-height:1.2; margin:6px 0 6px; font-weight:600; letter-spacing:.01em;}
+  .sub{font-size:12px; color:var(--muted); margin:0;}
+  .stamp{font-size:11px; color:#a3262f; border:1px solid #d9a3a7; background:#fbeff0;
+         padding:6px 10px; border-radius:4px; letter-spacing:.06em;}
+  .screens{display:flex; gap:28px;}
+  figure{margin:0;}
+  .phone{width:390px; background:var(--frame); border:1px solid #26272d; border-radius:30px;
+         overflow:hidden; box-shadow:0 18px 40px rgba(20,22,28,.14);}
+  .screen{height:780px; position:relative; overflow:hidden; color:var(--text);}
+  .spec{height:94px; background:#141519; border-top:1px solid #26272d; padding:10px 14px;}
+  .speclabel{font-size:9px; color:#75767f; letter-spacing:.12em; margin-bottom:6px;}
+  .spec p{margin:0 0 5px; font-size:10.5px; line-height:1.45; color:#c9c9d2; display:flex; gap:6px;}
+  .spec b{display:inline-flex; width:14px; height:14px; flex:0 0 14px; align-items:center; justify-content:center;
+          background:var(--gold); color:#2a210f; border-radius:50%; font-size:9px; font-weight:600;}
+  .status{height:24px; display:flex; justify-content:space-between; align-items:center;
+          padding:0 16px; font-size:10px; color:#d6d6de;}
+  .num{display:inline-flex; width:15px; height:15px; align-items:center; justify-content:center;
+       background:var(--gold); color:#2a210f; border-radius:50%; font-size:9px; font-weight:600; flex:0 0 15px;}
+  .topbar{display:flex; align-items:center; justify-content:space-between; padding:6px 16px 10px;}
+  .logo{font-size:17px; font-weight:600; letter-spacing:.02em;}
+  .searchrow{display:flex; align-items:center; gap:8px; padding:0 16px;}
+  .search{flex:1; height:36px; background:var(--surface); border:1px solid #2b2c33; border-radius:18px;
+          display:flex; align-items:center; gap:8px; padding:0 12px; font-size:11.5px; color:#8f909b;}
+  .search .ico{font-size:13px; color:#a7a8b3;}
+  .sechead{display:flex; align-items:center; gap:8px; padding:18px 16px 10px;}
+  .sechead span{font-size:13px; font-weight:600;}
+  .sechead em{font-size:10.5px; color:var(--text2); font-style:normal; margin-left:auto;}
+  .albums{display:grid; grid-template-columns:1fr 1fr; gap:12px 12px; padding:0 16px;}
+  .album .cover{height:190px; border-radius:16px; overflow:hidden; background:#222;}
+  .album img{width:100%; height:100%; object-fit:cover; display:block;}
+  .album .t{font-size:11.5px; margin-top:7px;}
+  .album .m{font-size:9.5px; color:var(--text2); margin-top:2px;}
+
+  .detail-head{display:flex; align-items:center; gap:10px; padding:4px 14px 8px;}
+  .back{font-size:17px; color:#cfcfd8; width:20px;}
+  .detail-title{font-size:15px; font-weight:600;}
+  .detail-meta{font-size:10px; color:var(--text2); margin-left:auto; margin-right:6px;}
+  .chips{display:flex; gap:6px; padding:2px 14px 10px; overflow:hidden;}
+  .chip{font-size:10px; padding:3px 9px; border-radius:9px; background:var(--surface); color:#b8b8c3;}
+  .chip.on{background:#3a2226; color:#f0b9bd; border:1px solid #5a2f35;}
+  .wf{display:flex; gap:10px; padding:0 14px;}
+  .wf .col{flex:1; display:flex; flex-direction:column; gap:10px;}
+  .card{position:relative; border-radius:16px; overflow:hidden; background:#222;}
+  .card img{width:100%; height:100%; object-fit:cover; display:block;}
+  .b{position:absolute; display:flex; align-items:center; gap:3px; font-size:10px; color:#fff;
+     background:rgba(0,0,0,.44); border-radius:10px; padding:2px 7px;}
+  .b.tl{left:8px; top:8px;}
+  .b.br{right:8px; bottom:8px;}
+  .b .ic{font-size:9px; opacity:.9;}
+
+  .preview .bg{position:absolute; inset:0;}
+  .preview .bg img{width:100%; height:100%; object-fit:cover;}
+  .preview .shade{position:absolute; inset:0;
+     background:linear-gradient(180deg,rgba(0,0,0,.38) 0,rgba(0,0,0,0) 90px, rgba(0,0,0,0) 62%, rgba(0,0,0,.55) 100%);}
+  .pv-top{position:absolute; left:0; right:0; top:24px; display:flex; align-items:center; padding:8px 16px;}
+  .pv-top .num{margin-left:auto;}
+  .pv-badges .b.tl{left:16px; top:96px;}
+  .pv-badges .b.br{right:16px; bottom:168px;}
+  .toast{position:absolute; left:50%; transform:translateX(-50%); bottom:104px;
+     background:rgba(24,24,28,.92); border:1px solid #34353c; color:#e9e9ef;
+     font-size:10.5px; padding:8px 12px; border-radius:11px; white-space:nowrap;}
+  .toolbar{position:absolute; left:0; right:0; bottom:0; height:76px;
+     display:flex; align-items:center; gap:44px; padding:0 40px;
+     background:rgba(14,15,18,.86); border-top:1px solid #26272d;}
+  .tool{display:flex; flex-direction:column; align-items:center; gap:3px; font-size:8.5px; color:#b9b9c4;}
+  .tool .ic{font-size:17px; line-height:1;}
+  .tool.on{color:#f3a7ac;}
+  .toolbar .num{position:absolute; left:16px; top:-26px;}
+
+  .searchpage .sfield{display:flex; align-items:center; gap:8px; margin:4px 14px 0; }
+  .sfield .box{flex:1; height:34px; background:var(--surface); border:1px solid #2b2c33; border-radius:17px;
+     display:flex; align-items:center; padding:0 11px; font-size:11.5px; color:#ececf2;}
+  .sfield .x{font-size:11px; color:#8d8e99;}
+  .resmeta{display:flex; align-items:center; gap:6px; padding:14px 16px 8px; font-size:10px; color:var(--text2);}
+  .resmeta b{color:#ececf2; font-weight:500; font-size:10.5px;}
+  .rg{display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:0 14px;}
+
+  .details{display:flex; gap:24px; margin-top:30px;}
+  .panel{flex:1; background:#fff; border:1px solid var(--line); border-radius:14px; overflow:hidden;}
+  .panel .ph{font-size:11px; font-weight:600; padding:11px 14px; border-bottom:1px solid #ececef;
+     display:flex; align-items:center; gap:8px;}
+  .panel .ph i{font-style:normal; font-size:9px; color:#8a8b92; font-weight:400; margin-left:auto;}
+  .panel .pb{padding:12px 14px 14px;}
+  .crop{position:relative; height:150px; border-radius:12px; overflow:hidden; background:#222;}
+  .crop img{width:100%; height:100%; object-fit:cover; display:block;}
+  .crop .b.tl{left:10px; top:10px;}
+  .crop .b.br{right:10px; bottom:10px;}
+  .cap{font-size:10px; line-height:1.55; color:var(--muted); margin-top:9px;}
+  .cap b{color:#1b1c20; font-weight:600;}
+  .cmp{display:flex; gap:18px;}
+  .cmpit{flex:1;}
+  .cmplab{font-size:9.5px; color:#7a7b83; margin-bottom:6px; display:flex; gap:6px; align-items:center;}
+  .cmplab .tag{font-size:8.5px; padding:2px 6px; border-radius:6px; background:#eef0f2; color:#4a4b52;}
+  .mini{display:grid; gap:5px;}
+  .mini.three{grid-template-columns:1fr 1fr 1fr;}
+  .mini.two{grid-template-columns:1fr 1fr;}
+  .mini img{width:100%; height:52px; object-fit:cover; border-radius:7px; display:block;}
+  .mini .m0{height:52px; border-radius:7px; background:#e6e7ea;} 
+  .foot{display:flex; justify-content:space-between; margin-top:22px; font-size:10px; color:#8a8b92;}
+  .foot b{font-weight:500; color:#5c5d64;}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="head">
+    <div>
+      <div class="kicker">ZeroOne · Wallpaper App · 1.3.0</div>
+      <h1>产品改进效果示意</h1>
+      <p class="sub">按《产品改进方案-五项.md》正式执行版绘制 · 390 × 844 视口 · 数字为示例数据</p>
+    </div>
+    <div class="stamp">视觉示意，不是最终成品</div>
+  </div>
+
+  <div class="screens">
+    <!-- 1 首页 -->
+    <figure>
+      <div class="phone">
+        <div class="screen">
+          <div class="status"><span>9:41</span><span>▮▮ 5G</span></div>
+          <div class="topbar"><div class="logo">ZeroOne</div></div>
+          <div class="searchrow">
+            <div class="search"><span class="ico">⌕</span> 搜索壁纸、主题</div>
+            <span class="num">5</span>
+          </div>
+          <div class="sechead"><span>精选合辑</span><em>全部 ›</em><span class="num">1</span></div>
+          <div class="albums">
+            <div class="album"><div class="cover"><img src="mockup-assets/w1.jpg"></div><div class="t">自然风景</div><div class="m">531 张 · 湖泊 / 山川</div></div>
+            <div class="album"><div class="cover"><img src="mockup-assets/w4.jpg"></div><div class="t">动物萌宠</div><div class="m">306 张 · 猫 / 狗</div></div>
+            <div class="album"><div class="cover"><img src="mockup-assets/w8.jpg"></div><div class="t">城市建筑</div><div class="m">212 张 · 街景 / 夜景</div></div>
+            <div class="album"><div class="cover"><img src="mockup-assets/w9.jpg"></div><div class="t">文字壁纸</div><div class="m">148 张 · 书法 / 排版</div></div>
+            <div class="album"><div class="cover"><img src="mockup-assets/w6.jpg"></div><div class="t">动漫插画</div><div class="m">226 张 · 插画 / 二次元</div></div>
+            <div class="album"><div class="cover"><img src="mockup-assets/w5.jpg"></div><div class="t">人物</div><div class="m">87 张 · 情侣 / 写真</div></div>
+          </div>
+        </div>
+        <figcaption class="spec">
+          <div class="speclabel">示意说明</div>
+          <p><b>5</b> 首页顶部新增搜索入口，点击进入「图库」全库搜索</p>
+          <p><b>1</b> 卡片缩略图仅做 brightness(1.04) 轻微提亮，不改变原图</p>
+        </figcaption>
+      </div>
+    </figure>
+
+    <!-- 2 合辑详情 -->
+    <figure>
+      <div class="phone">
+        <div class="screen">
+          <div class="status"><span>9:41</span><span>▮▮ 5G</span></div>
+          <div class="detail-head">
+            <div class="back">‹</div><div class="detail-title">自然风景</div>
+            <div class="detail-meta">共 531 张</div><span class="num">4</span>
+          </div>
+          <div class="chips">
+            <div class="chip on">全部颜色</div><div class="chip">蓝</div><div class="chip">青</div><div class="chip">绿</div><div class="chip">灰</div>
+          </div>
+          <div class="wf">
+            <div class="col">
+              <div class="card" style="height:250px"><img src="mockup-assets/w1.jpg"><div class="b tl"><span class="ic">◉</span>1.2K</div><div class="b br"><span class="ic">↓</span>42</div></div>
+              <div class="card" style="height:206px"><img src="mockup-assets/w2.jpg"><div class="b tl"><span class="ic">◉</span>386</div><div class="b br"><span class="ic">↓</span>12</div></div>
+              <div class="card" style="height:188px"><img src="mockup-assets/w6.jpg"></div>
+              <div class="card" style="height:212px"><img src="mockup-assets/w9.jpg"><div class="b tl"><span class="ic">◉</span>1.1K</div><div class="b br"><span class="ic">↓</span>17</div></div>
+              <div class="card" style="height:238px"><img src="mockup-assets/w4.jpg"></div>
+            </div>
+            <div class="col">
+              <div class="card" style="height:214px"><img src="mockup-assets/w10.jpg"><div class="b tl"><span class="ic">◉</span>742</div><div class="b br"><span class="ic">↓</span>9</div></div>
+              <div class="card" style="height:264px"><img src="mockup-assets/w8.jpg"><div class="b tl"><span class="ic">◉</span>2.1K</div><div class="b br"><span class="ic">↓</span>38</div></div>
+              <div class="card" style="height:196px"><img src="mockup-assets/w7.jpg"><div class="b tl"><span class="ic">◉</span>634</div></div>
+              <div class="card" style="height:222px"><img src="mockup-assets/w3.jpg"></div>
+            </div>
+          </div>
+        </div>
+        <figcaption class="spec">
+          <div class="speclabel">示意说明</div>
+          <p><b>2</b> 双列瀑布流；卡高直接按 width/height，天然不等高</p>
+          <p><b>4</b> 左上浏览 / 右下保存，半透明胶囊；第 3 张 0/0 不渲染角标</p>
+        </figcaption>
+      </div>
+    </figure>
+
+    <!-- 3 全屏预览 -->
+    <figure>
+      <div class="phone">
+        <div class="screen preview">
+          <div class="bg"><img src="mockup-assets/w1.jpg"></div>
+          <div class="shade"></div>
+          <div class="pv-top"><div class="back">‹</div><span class="num">4</span></div>
+          <div class="pv-badges"><div class="b tl"><span class="ic">◉</span>1.2K</div><div class="b br"><span class="ic">↓</span>42</div></div>
+          <div class="toast">已保存到相册，可在系统图库设为壁纸</div>
+          <div class="toolbar">
+            <span class="num">3</span>
+            <div class="tool"><span class="ic">♡</span>收藏</div>
+            <div class="tool on"><span class="ic">↓</span>保存</div>
+            <div class="tool"><span class="ic">✎</span>编辑</div>
+          </div>
+        </div>
+        <figcaption class="spec">
+          <div class="speclabel">示意说明</div>
+          <p><b>3</b> 已删除锁屏/桌面模拟，工具栏只剩收藏 / 保存 / 编辑</p>
+          <p><b>4</b> 角标位置与列表一致；保存后 toast 文案如图</p>
+        </figcaption>
+      </div>
+    </figure>
+
+    <!-- 4 搜索结果 -->
+    <figure>
+      <div class="phone">
+        <div class="screen searchpage">
+          <div class="status"><span>9:41</span><span>▮▮ 5G</span></div>
+          <div class="detail-head">
+            <div class="back">‹</div><div class="detail-title">搜索</div><span class="num">5</span>
+          </div>
+          <div class="sfield">
+            <div class="box"><span class="ico" style="color:#8f909b">⌕</span>&nbsp;风景<span class="x" style="margin-left:auto">✕</span></div>
+          </div>
+          <div class="resmeta"><b>全库 531 张</b><span>· 按最新</span></div>
+          <div class="rg">
+            <div class="card" style="height:214px"><img src="mockup-assets/w2.jpg"><div class="b tl"><span class="ic">◉</span>986</div><div class="b br"><span class="ic">↓</span>21</div></div>
+            <div class="card" style="height:176px"><img src="mockup-assets/w10.jpg"><div class="b tl"><span class="ic">◉</span>412</div></div>
+            <div class="card" style="height:172px"><img src="mockup-assets/w3.jpg"></div>
+            <div class="card" style="height:210px"><img src="mockup-assets/w5.jpg"><div class="b tl"><span class="ic">◉</span>1.5K</div><div class="b br"><span class="ic">↓</span>26</div></div>
+            <div class="card" style="height:196px"><img src="mockup-assets/w6.jpg"><div class="b br"><span class="ic">↓</span>15</div></div>
+            <div class="card" style="height:224px"><img src="mockup-assets/w1.jpg"><div class="b tl"><span class="ic">◉</span>3.4K</div><div class="b br"><span class="ic">↓</span>61</div></div>
+          </div>
+        </div>
+        <figcaption class="spec">
+          <div class="speclabel">示意说明</div>
+          <p><b>5</b> 新增全库搜索结果页，按关键词分页；空关键词回到图库列表</p>
+          <p>结果卡片沿用同一套角标与 0 值隐藏规则</p>
+        </figcaption>
+      </div>
+    </figure>
+  </div>
+
+  <div class="details">
+    <div class="panel">
+      <div class="ph">角标细节 <i>不占图、不加底栏</i></div>
+      <div class="pb">
+        <div class="crop"><img src="mockup-assets/w2.jpg"><div class="b tl"><span class="ic">◉</span>1.2K</div><div class="b br"><span class="ic">↓</span>42</div></div>
+        <div class="cap"><b>rgba(0,0,0,.44)</b> 胶囊 / 圆角 10 / 字号 11 / 内边距 2×7；只覆盖四角，不压主体。</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ph">0 值不渲染 <i>viewCount=0 且 downloadCount=0</i></div>
+      <div class="pb">
+        <div class="crop"><img src="mockup-assets/w3.jpg"></div>
+        <div class="cap">两张都为 0 时<b>不显示</b>角标；单边为 0 只显示另一边，不出现「0」。</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ph">列数对比 <i>别把两处改混</i></div>
+      <div class="pb">
+        <div class="cmp">
+          <div class="cmpit">
+            <div class="cmplab"><span class="tag">保持</span> 图库合辑封面</div>
+            <div class="mini three"><img src="mockup-assets/w1.jpg"><img src="mockup-assets/w4.jpg"><img src="mockup-assets/w8.jpg"></div>
+            <div class="cap">3 列，不改</div>
+          </div>
+          <div class="cmpit">
+            <div class="cmplab"><span class="tag">改为</span> 合辑详情</div>
+            <div class="mini two"><img src="mockup-assets/w2.jpg"><img src="mockup-assets/w1.jpg"></div>
+            <div class="cap">2 列瀑布流</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>视觉示意，不是最终成品；所有数值、图源仅用于排版参考。</span>
+    <span><b>约束以《产品改进方案-五项.md》第 8 节为准</b></span>
+  </div>
+</div>
+</body>
+</html>

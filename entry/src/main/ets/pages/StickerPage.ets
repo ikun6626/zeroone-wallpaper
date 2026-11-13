@@ -7,7 +7,6 @@ import { BusinessError } from '@ohos.base';
 import { Wallpaper } from '../model/Wallpaper';
 import { LocalWallpapers } from '../common/constants/LocalWallpapers';
 import { WallpaperDataSource } from '../common/store/WallpaperDataSource';
-import { showSetWallpaperDialog, WallpaperKind } from '../common/components/SetWallpaperGuide';
 import { PixelScope } from '../common/utils/PixelScope';
 import { PreferenceUtil } from '../common/utils/PreferenceUtil';
 import { AuthManager } from '../common/net/AuthManager';
@@ -23,7 +22,7 @@ import matrix4 from '@ohos.matrix4';
  *
  *  ① 选背景（内置壁纸库 / 相册）
  *  ② 贴贴纸（分类 + 收藏，拖拽 / 缩放 / 旋转 + 阴影 / 调色）
- *  ③ 保存到系统相册（统一 JPG；锁屏/桌面由用户去系统图库设置）
+ *  ③ 保存到系统相册（统一 JPG，由用户去系统图库自行设置）
  *
  * 相比原两页新增：三步引导条、统一底部工具栏、图层列表、撤销/重做、贴纸收藏。
  *
@@ -101,9 +100,7 @@ const PANEL_TABS: PanelTab[] = [
 /** 导出目标 */
 enum SaveTarget {
   ALBUM_JPG = 0,    // 保存 JPG 到相册
-  ALBUM_PNG = 1,    // 保存透明 PNG 到相册
-  SET_LOCK = 2,     // 存为锁屏壁纸用图（保存后引导去图库设置）
-  SET_HOME = 3      // 存为桌面壁纸用图（保存后引导去图库设置）
+  ALBUM_PNG = 1     // 保存透明 PNG 到相册
 }
 
 const EXPORT_RATIOS: string[] = ['free', '9:16', '1:1', '3:4'];
@@ -832,16 +829,14 @@ export struct StickerPage {
    * 背景取景 / 贴纸位置大小 / 阴影 / 调色 全是屏幕渲染结果，零坐标换算。
    *  - ALBUM_JPG：SaveButton 临时授权 + JPG 存系统相册
    *  - ALBUM_PNG：临时隐藏背景 → 截图得到透明底 PNG 存系统相册
-   *  - SET_LOCK / SET_HOME：保存 JPG 到相册 + 弹窗引导去图库设为壁纸
-   *    （四个入口都必须是 SaveButton，普通点击没有临时写相册授权）
+   *    （两个入口都必须是 SaveButton，普通点击没有临时写相册授权）
    */
   async save(target: number): Promise<void> {
     if (this.saving) {
       return;
     }
     // 兜底：任何路径调用保存都要求登录；浏览与收藏不受影响
-    if (!AuthManager.getInstance().isLoggedIn()) {
-      AuthManager.getInstance().showAuthOverlay();
+    if (!AuthManager.getInstance().requireLoginForSave()) {
       promptAction.showToast({ message: '请先登录后再保存图片' });
       return;
     }
@@ -875,22 +870,6 @@ export struct StickerPage {
           fileIo.writeSync(f.fd, pngBuf);
           fileIo.closeSync(f);
           promptAction.showToast({ message: '透明PNG已保存到相册 ✅' });
-        } else if (target === SaveTarget.SET_LOCK || target === SaveTarget.SET_HOME) {
-          // @ohos.wallpaper 自 API 9 起废弃，三方应用不能直接换壁纸：
-          // 保存 JPG 到相册 + 引导去系统图库设置（文案统一由 SetWallpaperGuide 产出）
-          const buf: ArrayBuffer = await packer.packing(pm, { format: 'image/jpeg', quality: 95 });
-          const dest: string = `${ctx.filesDir}/zeroone_wallpaper_${Date.now()}.jpg`;
-          tempPath = dest;
-          const wf = fileIo.openSync(dest, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
-          fileIo.writeSync(wf.fd, buf);
-          fileIo.closeSync(wf);
-          const phHelper: photoAccessHelper.PhotoAccessHelper = photoAccessHelper.getPhotoAccessHelper(ctx);
-          const uri: string = await phHelper.createAsset(photoAccessHelper.PhotoType.IMAGE, 'jpg');
-          const f2 = fileIo.openSync(uri, fileIo.OpenMode.WRITE_ONLY);
-          fileIo.copyFileSync(dest, f2.fd);
-          fileIo.closeSync(f2);
-          const kind: number = target === SaveTarget.SET_LOCK ? WallpaperKind.LOCK : WallpaperKind.HOME;
-          await showSetWallpaperDialog(kind);
         } else {
           const buf: ArrayBuffer = await packer.packing(pm, { format: 'image/jpeg', quality: 95 });
           const dest: string = `${ctx.filesDir}/zeroone_export_${Date.now()}.jpg`;
@@ -903,7 +882,7 @@ export struct StickerPage {
           const f2 = fileIo.openSync(uri, fileIo.OpenMode.WRITE_ONLY);
           fileIo.copyFileSync(dest, f2.fd);
           fileIo.closeSync(f2);
-          promptAction.showToast({ message: '已保存到相册，请在系统图库中设为壁纸' });
+          promptAction.showToast({ message: '已保存到相册，可在系统图库设为壁纸' });
         }
       } finally {
         PixelScope.safeRelease(pm);
@@ -1519,12 +1498,11 @@ export struct StickerPage {
         .enabled(!this.saving)
         .onClick((event: ClickEvent, result: SaveButtonOnClickResult) => {
           if (result === SaveButtonOnClickResult.SUCCESS) {
-            if (!AuthManager.getInstance().isLoggedIn()) {
-              AuthManager.getInstance().showAuthOverlay();
+            if (!AuthManager.getInstance().requireLoginForSave()) {
               promptAction.showToast({ message: '请先登录后再保存图片' });
               return;
             }
-            // 只保留一个保存入口：统一存 JPG，锁屏/桌面由用户去系统图库选择
+            // 只保留一个保存入口：统一存 JPG 到系统相册
             this.save(SaveTarget.ALBUM_JPG);
           }
         })
@@ -1623,7 +1601,7 @@ export struct StickerPage {
                   .fontWeight(FontWeight.Medium)
                   .fontColor('#F2F2F5')
                 Text(this.bgKind === 0
-                  ? '点下方「背景」挑图后保存'
+                  ? '点下方「背景」挑选'
                   : '拖动 · 双指缩放旋转')
                   .fontSize(11)
                   .fontColor('#C9C9D4')

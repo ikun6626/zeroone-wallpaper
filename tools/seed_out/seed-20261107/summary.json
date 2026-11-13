@@ -1,0 +1,37 @@
+{
+  "batch": "seed-20261107",
+  "generated_at": "2026-11-07T18:36:21",
+  "input_count": 1619,
+  "stats": {
+    "count": 1619,
+    "group_counts": {
+      "batch113": 7,
+      "daily": 34,
+      "other": 1578
+    },
+    "group_view_means": {
+      "batch113": 157.9,
+      "daily": 159.3,
+      "other": 49.2
+    },
+    "group_view_medians": {
+      "batch113": 84,
+      "daily": 95,
+      "other": 26
+    },
+    "view_min": 20,
+    "view_p50": 27,
+    "view_p90": 97,
+    "view_max": 2000,
+    "view_mean": 52.0,
+    "download_min": 1,
+    "download_p50": 2,
+    "download_max": 212,
+    "save_rate_mean": 0.0631,
+    "save_rate_min": 0.0301,
+    "save_rate_max": 0.12,
+    "style_groups": 17,
+    "style_mean_min": 44.7,
+    "style_mean_max": 1054.5
+  }
+}

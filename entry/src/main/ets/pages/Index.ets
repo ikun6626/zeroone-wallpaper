@@ -1,5 +1,6 @@
 import { HomePage } from './HomePage';
 import { CategoryPage } from './CategoryPage';
+import { SearchPage } from './SearchPage';
 import { StickerPage } from './StickerPage';
 import { MinePage } from './MinePage';
 import { PreferenceUtil } from '../common/utils/PreferenceUtil';
@@ -10,9 +11,12 @@ import { PRIVACY_CONSENT_VERSION } from '../common/constants/LegalTexts';
 import { AuthManager } from '../common/net/AuthManager';
 import { ApiConfig } from '../common/net/ApiConfig';
 import { ImageCache } from '../common/net/ImageCache';
+import { SystemApi, AppUpdateInfo } from '../common/net/SystemApi';
+import { FavoriteSync } from '../common/net/FavoriteSync';
 import { LoginPage } from './LoginPage';
 import { RegisterPage } from './RegisterPage';
-import { common } from '@kit.AbilityKit';
+import { common, Want } from '@kit.AbilityKit';
+import { promptAction } from '@kit.ArkUI';
 
 /**
  * Index —— 主入口（底部 Tabs 导航 · 高级黑）
@@ -28,10 +32,14 @@ import { common } from '@kit.AbilityKit';
 struct Index {
   /** 当前选中的 Tab */
   @State currentIndex: number = 0;
+  /** 独立搜索页（首页搜索胶囊进入；不切图库 tab） */
+  @State showSearch: boolean = false;
   /** 全屏预览时隐藏底部 Tab 栏（沉浸式） */
   @State hideTabBar: boolean = false;
   /** 首页「更多」请求序号（随每次点击自增，编码进 AppStorage 请求值） */
   private pendingAlbumCounter: number = 0;
+  /** 首页搜索请求序号（同词重复搜索也必然触发） */
+  private pendingSearchCounter: number = 0;
 
   /**
    * 首次启动的隐私政策同意弹窗
@@ -57,14 +65,18 @@ struct Index {
    * 默认 false：所有人都能浏览预览图片。
    * 由"我的"页登录按钮、或保存图片时未登录的引导设置为 true。
    */
-  @StorageLink(ApiConfig.APP_KEY_AUTH_OVERLAY) showAuthOverlay: boolean = false;
+  @StorageLink(ApiConfig.APP_KEY_AUTH_OVERLAY) @Watch('onAuthOverlayChange') showAuthOverlay: boolean = false;
   /** 鉴权覆盖层当前显示登录还是注册 */
   @State authView: 'login' | 'register' = 'login';
+  /** 上一次的覆盖层显示状态：只在 false → true 的「重新打开」时重置 authView */
+  private lastAuthOverlay: boolean = false;
 
   /** Tab 文字（「合辑」改名「图库」，对标 Cuto） */
   private readonly tabLabels: string[] = ['首页', '图库', '贴纸', '我的'];
 
   aboutToAppear(): void {
+    // 记录初始状态，避免启动时把「本来已打开」误判为一次重新打开
+    this.lastAuthOverlay = this.showAuthOverlay;
     const ctx = getContext(this) as common.UIAbilityContext;
     PreferenceUtil.init(ctx);
     // 图片三级缓存初始化（cacheDir/remote-img）
@@ -80,6 +92,16 @@ struct Index {
     // 必须在 PreferenceUtil.init 之后调用（它依赖 PreferenceUtil 读写 token）。
     AuthManager.getInstance().init();
 
+    // 收藏云同步（2026-10-25「收藏并入账号」）：挂上收藏变化回调，
+    // 登录态下本地收藏/取消会增量同步云端。
+    FavoriteSync.init();
+
+    // 版本更新检查（2026-10-25 回访闭环）：
+    // 合规要求 —— 未同意隐私政策前不得发起任何网络请求，所以只在同意后检查。
+    if (!this.showPrivacyConsent) {
+      this.checkAppUpdate();
+    }
+
     // 统一数据源：壁纸目录已随包内置（LocalWallpapers），这里同步发布首屏 ——
     // 没有网络请求、没有骨架屏等待、不存在"连不上云端"的兜底分支。
     // 四个子页面只订阅 AppStorage 状态键，不直接访问数据源。
@@ -87,9 +109,24 @@ struct Index {
   }
 
   /**
+   * 登录/注册覆盖层显示状态变化
+   *
+   * 只在「关闭 → 打开」这一次重置到登录页：否则上次停在注册页，关闭后
+   * 再从账号入口进来会直接落在注册页。覆盖层打开期间的「登录 ↔ 注册」
+   * 切换不改这个状态，因此不会被重置。
+   */
+  onAuthOverlayChange(): void {
+    const reopened: boolean = this.showAuthOverlay && !this.lastAuthOverlay;
+    this.lastAuthOverlay = this.showAuthOverlay;
+    if (reopened) {
+      this.authView = 'login';
+    }
+  }
+
+  /**
    * 系统返回键
    *
-   * 优先级交给最上层覆盖层：设为壁纸引导 → 图片编辑器 → 大图预览。
+   * 优先级交给最上层覆盖层：图片编辑器 → 大图预览。
    * （贴纸专区已合并为「贴纸」Tab 页本身，不再是覆盖层，故不参与返回键接管。）
    *
    * 它们返回 true 表示已消费（例如弹出"放弃编辑？"或关闭覆盖层）；
@@ -100,6 +137,70 @@ struct Index {
    */
   onBackPress(): boolean {
     return EditGuard.handleBack();
+  }
+
+  /**
+   * 版本更新检查（2026-10-25 回访闭环，HANDOFF P1-6 收口）
+   *
+   * GET /versions/latest?platform=harmony&versionCode=N → 后端比对算 needUpdate。
+   * 有更新弹窗提示（非强制不阻断使用，强制更新只给"立即更新"）；
+   * 检查失败/无更新静默跳过 —— 版本提示是增强，不是依赖。
+   */
+  private async checkAppUpdate(): Promise<void> {
+    let info: AppUpdateInfo | null = null;
+    try {
+      info = await SystemApi.checkUpdate();
+    } catch {
+      return;
+    }
+    if (info === null) {
+      return;
+    }
+    const update: AppUpdateInfo = info;
+    AlertDialog.show({
+      title: `发现新版本 v${update.versionName}`,
+      message: update.updateContent.length > 0 ? update.updateContent : '优化体验，修复已知问题',
+      autoCancel: !update.forceUpdate,
+      alignment: DialogAlignment.Center,
+      buttons: update.forceUpdate
+        ? [
+          {
+            value: '立即更新',
+            action: (): void => {
+              this.openUpdateLink(update.downloadUrl);
+            }
+          }
+        ]
+        : [
+          {
+            value: '稍后再说',
+            action: (): void => {
+            }
+          },
+          {
+            value: '立即更新',
+            action: (): void => {
+              this.openUpdateLink(update.downloadUrl);
+            }
+          }
+        ]
+    });
+  }
+
+  /** 打开下载页（后台 app_versions.downloadUrl 配置的应用市场/网页地址） */
+  private openUpdateLink(url: string): void {
+    const fallback: () => void = (): void => {
+      promptAction.showToast({ message: '暂时打不开更新页，请稍后在应用市场更新' });
+    };
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      const want: Want = { action: 'ohos.want.action.viewData', uri: url };
+      ctx.startAbility(want).catch((): void => {
+        fallback();
+      });
+    } catch {
+      fallback();
+    }
   }
 
   /** Tab 系统符号图标（选中/未选中同一图标，靠颜色区分；对齐图标统一方案） */
@@ -139,6 +240,10 @@ struct Index {
               AppStorage.setOrCreate(ApiConfig.APP_KEY_OPEN_ALBUM,
                 `${this.pendingAlbumCounter}:${slug}`);
               this.currentIndex = 1;
+            },
+            onSearch: (keyword: string) => {
+              // 首页搜索 → 独立搜索页（不跳图库；keyword 为空时进入历史/热门态）
+              this.showSearch = true;
             }
           })
         }
@@ -146,7 +251,8 @@ struct Index {
 
         TabContent() {
           CategoryPage({
-            hideTabBar: (v: boolean) => { this.hideTabBar = v; }
+            hideTabBar: (v: boolean) => { this.hideTabBar = v; },
+            onSearch: () => { this.showSearch = true; }
           })
         }
         .tabBar(this.tabBarBuilder(1))
@@ -168,12 +274,23 @@ struct Index {
       .backgroundColor('#111114')
       .scrollable(false)
 
+      // 独立搜索页：盖住 Tabs，关闭后仍停留在原 tab
+      if (this.showSearch) {
+        SearchPage({
+          onClose: (): void => {
+            this.showSearch = false;
+          }
+        })
+      }
+
       // 首次启动的隐私政策弹窗：盖在 Tabs **之上**，未同意不得进入主界面
       if (this.showPrivacyConsent) {
         PrivacyConsentDialog({
           onAgree: () => {
             PreferenceUtil.setString(this.KEY_PRIVACY_CONSENT, PRIVACY_CONSENT_VERSION);
             this.showPrivacyConsent = false;
+            // 同意后才允许联网行为：补一次版本检查
+            this.checkAppUpdate();
           },
           onReject: () => {
             // 「不同意」必须真正退出应用 —— 只把弹窗关掉不算（审核要点 2）
