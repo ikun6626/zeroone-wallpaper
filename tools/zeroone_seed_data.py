@@ -7,7 +7,7 @@ ZeroOne 种子数据（viewCount / downloadCount）生成与清除
 用途：在真实用户量不足、推荐流没有曝光分母的阶段，给现有「唯一图集」灌入
 一条可识别的长尾基线，使推荐流的排序、角标、看板能被真实验证。
 
-设计口径（与《产品改进方案-五项.md》§5A.8 一致）
+设计口径（与 PROJECT.md 第 3 节一致）
 - 浏览 viewCount：帕累托长尾 x_m=25、alpha=1.35，硬上限 2000
 - 保存 downloadCount：view × 保存率，保存率 = 3% + 9%·u^1.8（均值约 6.2%，落在 3%~12%）
 - 风格组：先乘一个组级系数 lognormal(sigma=0.45)，再乘单图抖动 lognormal(sigma=0.18)

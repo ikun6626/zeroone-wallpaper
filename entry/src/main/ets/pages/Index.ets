@@ -25,7 +25,7 @@ import { promptAction } from '@kit.ArkUI';
  * 主题：近黑背景 #0F0F12 · 强调红 #C9333D（底色）/ #E8606A（深色底上的文字）· 精选金 #F0D08A
  *
  * 配色以应用市场「色彩对比度」审核项为准：正文文字与背景 ≥ 4.5:1，图标/标题 ≥ 3:1。
- * 改动配色时请跑 tools/contrast_audit.py 复核（详见《整改说明-1.1.0-色彩与动效.md》）。
+ * 改动配色时请跑 tools/contrast_audit.py 复核（详见 PROJECT.md 第 7.1 节）。
  */
 @Entry
 @Component
