@@ -71,10 +71,10 @@ zeroone/
 │           ├── base/media/         # 本地壁纸主图与缩略图（307 组）
 │           └── rawfile/            # 内置动效素材
 ├── tools/                          # 素材导入、去重、元数据生成等 Python 脚本
-├── docs/                           # 设计与验收记录、上架素材
+├── docs/                           # 展示图与元数据 CSV
 ├── legal-site/                     # 隐私政策与用户协议静态页
-├── AGENTS.md                       # 给 AI Agent / 协作者的改动约定
-└── 截图/                            # 应用市场截图与审核整改证据
+├── PROJECT.md                      # 项目文档：产品、架构、决策与工程约定
+└── README.md
 ```
 
 客户端共 **76 个 ArkTS 文件 / 约 2.1 万行**。
@@ -85,7 +85,7 @@ zeroone/
 
 > ⚠️ 仓库不含内置壁纸素材（`entry/src/main/resources/base/media`，680 个文件约 39 MB）与
 > `rawfile/frog_bg.gif`。clone 后需要先补齐这些资源，否则编译会因缺图报错。
-> 素材组织方式见 `AGENTS.md`，导入流程用 `tools/import_workbuddy_batch.py`。
+> 素材组织方式与导入门槛见 [PROJECT.md](PROJECT.md) 第 10 节，导入用 `tools/import_workbuddy_batch.py`。
 
 1. 用 DevEco Studio 打开本目录，等待 `oh_modules` 同步完成
 2. 配置签名：`File > Project Structure > Signing Configs` 勾选 *Automatically generate signature*
@@ -119,18 +119,18 @@ HVIGOR="/c/Program Files/Huawei/DevEco Studio/tools/hvigor/bin/hvigorw"
 | 上架渠道 | 华为应用市场（1.2.0 起在架，1.3.0 为当前迭代） |
 | 软件著作权 | 已登记 |
 
-变更记录见 [CHANGELOG.md](CHANGELOG.md)，当前事实基准见 [CURRENT-STATE.md](CURRENT-STATE.md)。
+产品逻辑、技术架构、关键决策与踩过的坑都写在 [PROJECT.md](PROJECT.md)；版本演进见其中第 8 节。
 
 ## 关于开发方式
 
 这个项目是我一个人做的，鸿蒙端、NestJS 后端、React 管理后台三端代码**均由大模型 / AI Agent 协同产出**，我的角色是定义规格与验收：
 
-1. 先把需求写成 PRD，把当前状态固化成 `CURRENT-STATE.md`，让文档成为唯一事实基准
+1. 先把需求写成产品文档，把当前状态固化成一份事实基准，让文档成为唯一可对齐的目标
 2. 把需求拆成可验收的原子任务，交给 Agent 生成代码
 3. 跑构建、跑用例、对照截图验收；失败时带上日志与上下文回退重试
-4. 把踩过的坑固化成 `AGENTS.md` 规则与 `tools/` 下的脚本，减少同类返工
+4. 把踩过的坑固化成工程约定与 `tools/` 下的脚本，减少同类返工
 
-所以仓库里 `docs/`、`CHANGELOG.md`、`CURRENT-STATE.md` 的密度高于一般个人项目——它们不是文档洁癖，而是这套协作方式能跑通的前提。给 Agent 的硬性约定整理在 [AGENTS.md](AGENTS.md)：先读哪份文档、什么算改完、哪些东西绝对不能碰。
+这套方式的前提是**规格必须写得比代码更清楚**：需求先落成文档、状态先固化成基准，Agent 才有可对齐的目标。所以 [PROJECT.md](PROJECT.md) 里除了产品和架构，还专门留了一节工程约定——事实以哪份为准、什么算改完、哪些东西绝对不能碰、素材导入走哪条固定流程。
 
 ## 声明
 

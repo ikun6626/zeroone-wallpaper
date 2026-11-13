@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Render 整改说明-1.1.0-色彩与动效.md to a print-ready HTML (for PDF export).
+"""Render 审核整改说明 to a print-ready HTML (for PDF export).
+源文档已从仓库移出，归档在本机 .local/private/docs-archive/，使用前先放回该路径。
 
 Deliberately dependency-light: python-markdown + a small CJK-friendly stylesheet.
 """
